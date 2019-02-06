@@ -22,9 +22,18 @@ Use gen_dataset.py to generate LKF data-sets, which performs three steps for eac
 * run the LKF tracking algorithm
 
 
+## Algorithm description
+
+An in-depth description of the algorithm can be found here:
+```
+Hutter, N., Zampieri, L., and Losch, M.: Leads and ridges in Arctic sea ice from RGPS data and a new tracking algorithm, The Cryosphere Discuss., https://doi.org/10.5194/tc-2018-207, accepted for publication, 2018. 
+```
+
+
 ## Author
 
 Nils Hutter
 nils.hutter@awi.de
+
 
 ## License
