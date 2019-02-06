@@ -9,9 +9,8 @@ install python and install packages scipy.ndimage and skimage.morphology
 ### Download RGPS example data
 
 RGPS data in Lagrangian and Eulerian format need to be downloaded from Ron Kwok's homepage:
-``
-https://rkwok.jpl.nasa.gov/radarsat/index.html`
-```
+https://rkwok.jpl.nasa.gov/radarsat/index.html
+
 RGPS data needs to be unzip. The data needs to be orgnaized in a seperate directory for each winter that are named w9798, w9899, ...
 
 
