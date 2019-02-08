@@ -35,6 +35,10 @@ Hutter, N., Zampieri, L., and Losch, M.: Leads and ridges in Arctic sea ice from
 Nils Hutter
 nils.hutter@awi.de
 
+## DOI
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.2560078.svg)](https://doi.org/10.5281/zenodo.2560078)
+
 
 ## License
 GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007
+
