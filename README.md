@@ -4,7 +4,13 @@ Tools to detect and track deformation features (leads and pressure ridges) in se
 ## Getting Started
 
 ### Installing python
-install python and install packages scipy.ndimage and skimage.morphology
+A good description how to install python is given in:
+https://github.com/koldunovn/python_for_geosciences
+
+After installing a miniconda you need to install to additional packages with:
+```
+conda install scipy.ndimage skimage
+```
 
 ### Download RGPS example data
 
