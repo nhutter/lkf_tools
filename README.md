@@ -4,7 +4,7 @@ Tools to detect and track deformation features (leads and pressure ridges) in se
 ## Getting Started
 
 ### Installing python
-A good description how to install python is given in:
+A good description how to install python is given by N. Koldunov in:
 https://github.com/koldunovn/python_for_geosciences
 
 After installing a miniconda you need to install to additional packages with:
