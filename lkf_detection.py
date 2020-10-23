@@ -120,7 +120,7 @@ def cut_neighbours(img):
     X, Y = img.shape
     x, y = (1,1)
     overlap = 1
-    shape = (((X-2*overlap)/x), ((Y-2*overlap)/y), x+2*overlap, y+2*overlap) # number of patches, patch_shape
+    shape = (((X-2*overlap)//x), ((Y-2*overlap)//y), x+2*overlap, y+2*overlap) # number of patches, patch_shape
     strides = img.itemsize*np.array([Y*x, y, Y, 1])
     return np.lib.stride_tricks.as_strided(img, shape=shape, strides=strides)
 
@@ -398,8 +398,8 @@ def detect_segments(lkf_thin,eps_thres=0.1):
                                                                                   lkf_thin[1:-1,1:-1].shape),
                                                              return_counts=True)
             if np.any(new_starts_counts > 1):
-                print 'Warning: %i starting points arises maximum %i-times' %(np.sum(new_starts_counts>1),
-                                                                              np.max(new_starts_counts))
+                print ('Warning: %i starting points arises maximum %i-times' %(np.sum(new_starts_counts>1),
+                                                                              np.max(new_starts_counts)))
 
             # Append new positions of this detection step
             num_new_starts = new_starts.shape[0]
