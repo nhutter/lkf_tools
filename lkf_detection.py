@@ -268,33 +268,59 @@ def detect_segments(lkf_thin,eps_thres=0.1):
                 new_starts = np.append(new_starts,neigh_deactivate[new_starts_deact_ind].reshape((new_starts_deact_ind.size,2)),axis=0)
                 nodetect[new_starts[:,0].astype('int'),new_starts[:,1].astype('int')] = 0
                 nodetect_intm[1:-1,1:-1] = nodetect.copy()
+                # if ind<5:
+                #     print(new_starts.shape)
+                #     print(new_starts)
+                #     print(deactivate_segs_muln.shape)
+                #     print(deactivate_segs_muln)
+
+                
+
+        # Test for segements that are on the same point
+        nan_mask_segs = np.all(~np.isnan(seg_append),axis=-1)
         
+        ravel_seg_append = np.ravel_multi_index((seg_append[nan_mask_segs,0].astype('int'),
+                                                 seg_append[nan_mask_segs,1].astype('int')),
+                                                lkf_thin[1:-1,1:-1].shape)
+        seg_head_unique, seg_head_counts = np.unique(ravel_seg_append,return_counts=True)
+        deactivate_segs_samehead = np.empty((0,))
+        seg_head_continue = seg_head_unique[seg_head_counts==1]
+
+        if np.any(seg_head_counts>1):
+            deactivate_segs_samehead = np.hstack([np.where(ravel_seg_append==ihead)
+                                                  for ihead in seg_head_unique[seg_head_counts>1]]).squeeze()
+            new_starts = np.concatenate([new_starts,np.vstack(np.unravel_index(seg_head_unique[seg_head_counts>1],
+                                                                               lkf_thin[1:-1,1:-1].shape)).T])
+        #print(deactivate_segs_samehead)
+
+
         # Remove sharp turns from seg_append (here because search for new starting points
         # needs to run beforehand)
         if seg.shape[-1]>1:
             seg_append[np.sum(np.abs(dx),axis=1)>1,:] = np.NaN # Remove from appending list
 
 
+
         # Plot intermediate results
-        if ind%20==0:
+        if ind<5:#ind%5==0:
             do_plot = False
         else:
             do_plot = False
         
         if do_plot:
-            plt.figure()
-            plt.pcolormesh(num_neighbours.copy())
+            fig,ax = plt.subplots(1,2,sharex=True,sharey=True,figsize=(9,5),tight_layout=True)
+            ax[0].pcolormesh(num_neighbours.copy())
             for i in range(seg.shape[0]):
                 if np.any(active_detection==i):
                     col = 'r'
                 else:
                     col = 'g'
-                plt.plot(seg[i,1,:]+0.5,seg[i,0,:]+0.5,col)
-                plt.text(seg[i,1,~np.isnan(seg[i,1,:])][-1]+0.5,seg[i,0,~np.isnan(seg[i,1,:])][-1]+0.5,'%i' %i,color='w')
+                ax[0].plot(seg[i,1,:]+0.5,seg[i,0,:]+0.5,col)
+                ax[0].text(seg[i,1,~np.isnan(seg[i,1,:])][-1]+0.5,seg[i,0,~np.isnan(seg[i,1,:])][-1]+0.5,'%i' %i,color='w')
             for i in range(neigh_deactivate.shape[0]):
-                plt.plot(neigh_deactivate[i,1]+0.5,neigh_deactivate[i,0]+0.5,'m.')
+                ax[0].plot(neigh_deactivate[i,1]+0.5,neigh_deactivate[i,0]+0.5,'m.')
             for i in range(new_starts.shape[0]):
-                plt.plot(new_starts[i,1]+0.5,new_starts[i,0]+0.5,'c.')
+                ax[0].plot(new_starts[i,1]+0.5,new_starts[i,0]+0.5,'c.')
             for i in range(active_detection.size):
                 if np.any(deactivate_segs_end.copy()==i):
                     mark = 'x'
@@ -302,23 +328,25 @@ def detect_segments(lkf_thin,eps_thres=0.1):
                     mark = 'v'
                 elif np.any(deactivate_segs_muln.copy()==i):
                     mark = 's'
+                elif np.any(deactivate_segs_samehead.copy()==i):
+                    mark = '>'
                 else:
                     mark = '.'
                 if ~np.isnan(seg_append[i,1]):
-                    plt.plot(seg_append[i,1]+0.5,seg_append[i,0]+0.5,color='r',marker=mark)
+                    ax[0].plot(seg_append[i,1]+0.5,seg_append[i,0]+0.5,color='r',marker=mark)
                 else:
-                    plt.plot(seg[active_detection[i],1,-1]+0.5,seg[active_detection[i],0,-1]+0.5,color='r',marker=mark)
+                    ax[0].plot(seg[active_detection[i],1,-1]+0.5,seg[active_detection[i],0,-1]+0.5,color='r',marker=mark)
             
 
-            plt.figure()
-            plt.pcolormesh(nodetect.copy()+lkf_thin[1:-1,1:-1])
+            #plt.figure()
+            ax[1].pcolormesh(nodetect.copy()+lkf_thin[1:-1,1:-1])
             for i in range(seg.shape[0]):
                 if np.any(active_detection==i):
                     col = 'r'
                 else:
                     col = 'g'
-                plt.plot(seg[i,1,:]+0.5,seg[i,0,:]+0.5,col)
-                plt.text(seg[i,1,~np.isnan(seg[i,1,:])][-1]+0.5,seg[i,0,~np.isnan(seg[i,1,:])][-1]+0.5,'%i' %i,color='w')
+                ax[1].plot(seg[i,1,:]+0.5,seg[i,0,:]+0.5,col)
+                ax[1].text(seg[i,1,~np.isnan(seg[i,1,:])][-1]+0.5,seg[i,0,~np.isnan(seg[i,1,:])][-1]+0.5,'%i' %i,color='w')
             for i in range(active_detection.size):
                 if np.any(deactivate_segs_end.copy()==i):
                     mark = 'x'
@@ -326,23 +354,35 @@ def detect_segments(lkf_thin,eps_thres=0.1):
                     mark = 'v'
                 elif np.any(deactivate_segs_muln.copy()==i):
                     mark = 's'
+                elif np.any(deactivate_segs_samehead.copy()==i):
+                    mark = 'd'
                 else:
                     mark = '.'
                 if ~np.isnan(seg_append[i,1]):
-                    plt.plot(seg_append[i,1]+0.5,seg_append[i,0]+0.5,color='r',marker=mark)
+                    ax[1].plot(seg_append[i,1]+0.5,seg_append[i,0]+0.5,color='r',marker=mark)
                 else:
-                    plt.plot(seg[active_detection[i],1,-1]+0.5,seg[active_detection[i],0,-1]+0.5,color='r',marker=mark)
+                    ax[1].plot(seg[active_detection[i],1,-1]+0.5,seg[active_detection[i],0,-1]+0.5,color='r',marker=mark)
 
+            ax[0].set_xlim([380,395])
+            ax[0].set_ylim([180,197])
+            for iax in ax: iax.set_aspect('equal')
+
+
+        
+            
         # Test for multiple times same start
         new_starts_unique, new_starts_counts = np.unique(np.ravel_multi_index((new_starts[:,0].astype('int'),
                                                                                new_starts[:,1].astype('int')),
                                                                               lkf_thin[1:-1,1:-1].shape),
                                                          return_counts=True)
-        if np.any(new_starts_counts > 1):
-            # print 'Warning: %i starting points arises maximum %i-times' %(np.sum(new_starts_counts>1),
-            #                                                               np.max(new_starts_counts))
-            new_starts = np.vstack(np.unravel_index(new_starts_unique,lkf_thin[1:-1,1:-1].shape)).T
-
+        
+        new_starts_unique = np.array([i_seg_start for i_seg_start in new_starts_unique if not np.any(seg_head_unique==i_seg_start)],dtype='int')
+        
+        # if np.any(new_starts_counts > 1):
+        #     # print 'Warning: %i starting points arises maximum %i-times' %(np.sum(new_starts_counts>1),
+        #     #                                                               np.max(new_starts_counts))
+        #     new_starts = np.vstack(np.unravel_index(new_starts_unique,lkf_thin[1:-1,1:-1].shape)).T
+        new_starts = np.vstack(np.unravel_index(new_starts_unique,lkf_thin[1:-1,1:-1].shape)).T
                 
         # Append new positions of this detection step
         num_new_starts = new_starts.shape[0]
@@ -360,9 +400,12 @@ def detect_segments(lkf_thin,eps_thres=0.1):
         active_detection_old = active_detection.copy()
         if np.any([(deactivate_segs_muln.size > 0),
                    (deactivate_segs_ang.size > 0),
-                   (deactivate_segs_end.size > 0)]):
+                   (deactivate_segs_end.size > 0),
+                   (deactivate_segs_samehead.size > 0)]):
             deactivate_segs = np.unique(np.append(deactivate_segs_muln,
                                                   np.append(deactivate_segs_ang,deactivate_segs_end)))
+            deactivate_segs = np.unique(np.hstack([deactivate_segs_muln,deactivate_segs_ang,
+                                                   deactivate_segs_end,deactivate_segs_samehead]))
             active_detection = np.delete(active_detection,deactivate_segs) # remove from active list
 
         # Activate new segments that started in this iteration

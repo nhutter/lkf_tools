@@ -55,7 +55,7 @@ def compute_MHD_segment(A,B,return_overlap=False,overlap_thres=2,angle_thres=45,
 
 # ------------------- 1. Tracking function 
 
-def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap=False,overlap_thres=1.5,angle_thres=25.):
+def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap=False,overlap_thres=1.5,angle_thres=25.,search_area_expansion=1):
     """Tracking function for LKFs
 
     Input: lkf0_d: advected detected LKF features
@@ -86,7 +86,7 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
 					  np.vstack([np.ceil(iseg_d)[:,0],np.floor(iseg_d)[:,1]]).T],
 					 axis=0) # Floor and ceil broken indexes
             # Broadening of search area
-            search_area_expansion = 1 # Number of cell for which the search area is expanded to be consider differences in the morphological thinning
+            #search_area_expansion = 1 # Number of cell for which the search area is expanded to be consider differences in the morphological thinning
             for i in range(search_area_expansion):
                 n_rows = search_area[:,0].size
                 search_area = np.concatenate([search_area,
@@ -107,10 +107,17 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
                                               search_area+np.concatenate([-np.ones(n_rows).reshape((n_rows,1)),
                                                                           -np.ones(n_rows).reshape((n_rows,1))],axis=1)],axis=0)
     
-    
-            search_area = np.vstack({tuple(row) for row in search_area})
+            search_area = np.unique(search_area, axis=0)
 
-    
+            search_area = search_area[np.all(search_area>=0,axis=1),:]
+            search_area = search_area[np.all([search_area[:,0]<nx,search_area[:,1]<ny],axis=0),:]
+
+            if np.any(search_area<0):
+                print('Attention negative index')
+
+            # Replaces by new numpy version unique
+            #search_area = np.vstack({tuple(row) for row in search_area})
+            
             # Find area orthogonal to the feature
             ## Perform linear fit to feature
             A = np.transpose(np.array([iseg_d[:,0], np.ones(iseg_d[:,0].shape)]))
@@ -161,7 +168,7 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
         
     
             # Loop over all LKFs to check whether there is overlap with search area
-            for i in range(lkf1.size):
+            for i in range(lkf1.shape[0]):
                 lkf_ravel = []
                 for io in range(lkf1[i].shape[0]):
                     lkf_ravel.append(np.ravel_multi_index(lkf1[i][io,:].astype('int'),
@@ -258,8 +265,8 @@ def gen_tracking_dataset_rgps(lkf_path,drift_path,output_path):
     lkf_filelist.sort()
     
     for ilkf in range(len(lkf_filelist[:-1])):
-        print "Track features in %s to %s" %(lkf_filelist[ilkf],
-                                             lkf_filelist[ilkf+1])
+        print("Track features in %s to %s" %(lkf_filelist[ilkf],
+                                             lkf_filelist[ilkf+1]))
         # Open lkf0 and compute drift estimate
         lkf0_d = drift_estimate_rgps(lkf_path + lkf_filelist[ilkf],drift_path)
 
