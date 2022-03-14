@@ -12,4 +12,6 @@ dependencies:
   - scikit-image
   - xarray
   - ipympl
+  - pyproj
+  - cartopy
 prefix: /Users/nhutter/miniforge3/envs/lkf_tools
