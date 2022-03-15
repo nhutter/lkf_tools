@@ -40,10 +40,12 @@ class process_dataset(object):
         netcdf_file: expected variables U,V,A in shape (time,x,y)
         """
         # Set output path
-        self.lkfpath = Path(output_path).joinpath(netcdf_file.split('.')[0])
-        for lkfpathseg in str(self.lkfpath.absolute()).split('/'):
-            if not os.path.exists(self.lkfpath):
-                os.mkdir(self.lkfpath)
+        self.lkfpath = Path(output_path).joinpath(netcdf_file.split('/')[-1].split('.')[0])
+        lkfpath = '/'
+        for lkfpathseg in str(self.lkfpath.absolute()).split('/')[1:]:
+            lkfpath += lkfpathseg + '/'
+            if not os.path.exists(lkfpath):
+                os.mkdir(lkfpath)
                 
         # Store detection parameters
         self.max_kernel = max_kernel
@@ -110,11 +112,11 @@ class process_dataset(object):
             self.ind_detect = []
             
         if indexes is None:
-            self.indexes = np.arange(time.size/self.t_red)
+            self.indexes = np.arange(self.time.size/self.t_red)
         else:
             self.indexes = indexes
         
-        for it in [j for j in self.indexes if j+1 not in self.ind_detect]:
+        for it in [int(j) for j in self.indexes if j+1 not in self.ind_detect]:
             
             print("Compute deformation rates and detect features for day %i" %(it+1))
         
@@ -127,9 +129,10 @@ class process_dataset(object):
                 aice = self.data.A[it+itr,:,:]
         
                 # Check if deformation rates are given
-                if hasattr(self.data,'div') and hasattr(self.data,'shr'):
+                if hasattr(self.data,'div') and hasattr(self.data,'shr') and hasattr(self.data,'vor'):
                     div = self.data.div[it+itr,:,:]
                     shr = self.data.shr[it+itr,:,:]
+                    vor = self.data.vor[it+itr,:,:]
                 else:
                     dudx = ((uice[2:,:]-uice[:-2,:])/(self.dxu[:-2,:]+self.dxu[1:-1,:]))[:,1:-1]
                     dvdx = ((vice[2:,:]-vice[:-2,:])/(self.dxu[:-2,:]+self.dxu[1:-1,:]))[:,1:-1]
@@ -138,6 +141,7 @@ class process_dataset(object):
 
                     div = (dudx + dvdy) * 3600. *24. # in day^-1
                     shr = np.sqrt((dudx-dvdy)**2 + (dudy + dvdx)**2) * 3600. *24. # in day^-1
+                    vor = 0.5*(dudy-dvdx) * 3600. *24. # in day^-1
 
                 eps_tot = np.sqrt(div**2+shr**2)
 
@@ -172,19 +176,21 @@ class process_dataset(object):
 
             if self.latlon:
                 lkf = segs2latlon_model(lkf,
-                                        self.lon[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
-                                            max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac],
-                                        self.lat[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
-                                            max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac])
-            if return_eps:
-                lkf =  segs2eps(lkf,
-                                div[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
-                                      max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac],
-                                shr[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
-                                       max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac])
+                                        np.array(self.lon[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
+                                            max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac]),
+                                        np.array(self.lat[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
+                                            max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac]))
+            if self.return_eps:
+                lkf =  segs2epsvor(lkf,
+                                np.array(div[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
+                                      max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac]),
+                                np.array(shr[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
+                                       max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac]),
+                                np.array(vor[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
+                                       max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac]))
 
             lkf_T = [j.T for j in lkf]
-            np.save(lkfpath + 'lkf_' + datafile.split('/')[-1][:-3] + '_%03i.npy' %(it+1), lkf_T)
+            np.save(self.lkfpath.joinpath('lkf_%s_%03i.npy' %(self.netcdf_file.split('/')[-1].split('.')[0],(it+1))), lkf_T)
             
             
             
@@ -195,15 +201,3 @@ class process_dataset(object):
             
             
             
-def segs2latlon_model(segs,lon,lat):
-    """ Function that converts index format of detected LKFs to
-    lat,lon coordinates
-    """
-    segsf = []
-    for iseg in segs:
-        segsf.append(np.concatenate([iseg,
-                                     np.stack([lon[iseg[0],iseg[1]],
-                                               lat[iseg[0],iseg[1]]])],
-                                     axis=0))
-    return segsf
-
