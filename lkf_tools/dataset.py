@@ -195,9 +195,76 @@ class process_dataset(object):
             
             
             
+    def track_lkfs(self,indexes=None, force_recompute=False):
+        """Function that generates tracking data set
+        :param indexes: time indexes that should be tracked. If None all time steps are tracked.
+        """
+
+        # Set output path
+        self.track_output_path = self.lkfpath.joinpath('tracked_pairs')
+        if not os.path.exists(self.track_output_path):
+            os.mkdir(self.track_output_path)
+
+        self.nx,self.ny = self.mask[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
+                                    max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac].shape
+
+        self.lkf_filelist = [i for i in os.listdir(self.lkfpath) if i.startswith('lkf') and i.endswith('.npy')]
+        self.lkf_filelist.sort()
+
+        # Determine which files have been already tracked
+        if force_recompute:
+            self.tracked_lkfs = []
+        else:
+            self.tracked_lkfs = [int(i.split('.')[0].split('_')[-1])-1 for i in os.listdir(self.track_output_path) if i.startswith('lkf') and i.endswith('.npy')]
+            self.tracked_lkfs.sort()
+
+        if indexes is None:
+            self.indexes = np.arange(self.time.size/self.t_red-1)
+        else:
+            self.indexes = indexes
+        
+        # Determine advection time step
+        self.dt = float(self.time.diff(dim='time')[0]/1e9)
+        self.adv_time = float(self.time.diff(dim='time')[0]/1e9)*self.t_red
+        
+        # Do the tracking
+        for ilkf in [int(j) for j in self.indexes if j+1 not in self.tracked_lkfs]:
+            print("Track features in %s to %s" %(self.lkf_filelist[ilkf],
+                                                 self.lkf_filelist[ilkf+1]))
             
-            
-            
-            
-            
-            
+            # Open lkf0 and compute drift estimate
+            lkf0_d = drift_estimate(self.lkfpath.joinpath(self.lkf_filelist[ilkf]),self.data,
+                                    self.mask,self.index_x,self.index_y,self.red_fac,
+                                    self.dxu,self.dyu,adv_time=self.adv_time,t=self.dt,dt=self.dt)
+
+            # Filter zero length LKFs due to NaN drift
+            ind_f   = np.where(np.array([iseg.size for iseg in lkf0_d])>0)[0]
+            lkf0_df = [iseg for iseg in lkf0_d if iseg.size>0]
+
+            # Read LKFs
+            lkf1 = np.load(self.lkfpath.joinpath(self.lkf_filelist[ilkf+1]),allow_pickle=True)
+            # lkf1_l = []
+            # for ilkf,iseg in enumerate(lkf1):
+            #     lkf1_l.append(iseg[:,:2])
+            lkf1_l = lkf1
+            if len(lkf1_l)==1:
+                #lkf1_l = np.array([lkf1.squeeze()],dtype='object')
+                lkf1_l = [lkf1.squeeze()]
+            for ilkf1,iseg in enumerate(lkf1):
+                lkf1_l[ilkf1] = iseg[:,:2]
+
+            # Compute tracking
+            tracked_pairs = track_lkf(lkf0_df, lkf1_l, self.nx, self.ny, 
+                                      thres_frac=0.75, min_overlap=4,
+                                      overlap_thres=1.5,angle_thres=25)
+
+            if len(tracked_pairs)==0:
+                tracked_pairs = np.array([[],[]])
+            else:
+                tracked_pairs = np.stack(tracked_pairs)
+                tracked_pairs[:,0] = ind_f[np.stack(tracked_pairs)[:,0]]
+
+            # Save tracked pairs
+            np.save(self.track_output_path.joinpath('lkf_tracked_pairs_%s_to_%s' %(self.lkf_filelist[ilkf][4:-4],
+                                                                 self.lkf_filelist[ilkf+1][4:-4])),
+                    tracked_pairs)
