@@ -2,30 +2,27 @@
 Tools to detect and track deformation features (leads and pressure ridges) in sea-ice deformation data.
 
 ## Getting Started
+Download/clone this repository.
 
 ### Installing python
-A good description how to install python is given by N. Koldunov in:
-https://github.com/koldunovn/python_for_geosciences
+First you need to install conda to install the python environment needed for this package. This can easily be done using a [miniforge](https://github.com/conda-forge/miniforge).
 
-After installing a miniconda you need to install to additional packages with:
+After installing conda with a miniforge you can install the python environment using:
 ```
-conda install scipy.ndimage skimage
+conda env create -f environment.yml
 ```
-
-### Download RGPS example data
-
-RGPS data in Lagrangian and Eulerian format need to be downloaded from Ron Kwok's homepage:
-https://rkwok.jpl.nasa.gov/radarsat/index.html
-
-RGPS data needs to be unzip. The data needs to be orgnaized in a seperate directory for each winter that are named w9798, w9899, ...
-
+and activate the environment:
+```
+conda activate lkf_tools
+```
 
 ## Generate LKF data-set
 
-Use gen_dataset.py to generate LKF data-sets, which performs three steps for each year:
-* run the LKF detection on RGPS deformation data
-* interpolate Lagrangian drift data to Eulerian grid
-* run the LKF tracking algorithm
+There is a [tutorial notebook](notebooks/tutorial_gen_dataset.ipynb) that illustrates how to generate a LKF data-set from a netcdf file. This tutorial uses model output from the [SIREx model output repository](https://doi.org/10.5281/zenodo.5555329) and also uses the SIREx sampling strategies that are described in detail in this [preprint](https://www.essoar.org/doi/10.1002/essoar.10507396.1). The tutorial shows you how to:
+* download and read in the netcdf file
+* detect LKFs in the netcdf file
+* run the tracking algorithm on the detected LKFs
+* some basic plotting routines of the extracted LKFs
 
 
 ## Algorithm description
