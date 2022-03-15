@@ -145,7 +145,7 @@ def nanmean_neighbours(img):
 
     
 
-def detect_segments(lkf_thin,eps_thres=0.1):
+def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
     """ Function to detect segments of LKFs in thinned binary field
     The aim of this function is to split the binary field into 
     multiple smaller segments, and guarantee that all points in a
@@ -193,7 +193,7 @@ def detect_segments(lkf_thin,eps_thres=0.1):
     # Loop parameters
     num_nodetect = np.sum(nodetect) # Number of undetected pixels
     ind = 0 # Index of detection iteration
-    max_ind = 500 # Maximum number of iterations
+    max_ind = max_ind # Maximum number of iterations
 
     angle_point_thres = 5 # Number of last point in segment to compute the critical angel to break segments
 
@@ -419,7 +419,7 @@ def detect_segments(lkf_thin,eps_thres=0.1):
                                                   np.append(deactivate_segs_ang,deactivate_segs_end)))
             deactivate_segs = np.unique(np.hstack([deactivate_segs_muln,deactivate_segs_ang,
                                                    deactivate_segs_end,deactivate_segs_samehead]))
-            active_detection = np.delete(active_detection,deactivate_segs) # remove from active list
+            active_detection = np.delete(active_detection,deactivate_segs.astype('int')) # remove from active list
 
         # Activate new segments that started in this iteration
         active_detection = np.append(active_detection,np.arange(seg_old_shape, seg_old_shape + num_new_starts))
@@ -1062,3 +1062,88 @@ def lkf_detect_eps(eps_tot,max_kernel=5,min_kernel=1,dog_thres=0,dis_thres=4,ell
 
     return seg
 
+
+
+def lkf_detect_eps_multday(eps_tot,max_kernel=5,min_kernel=1,
+                           dog_thres=0,dis_thres=4,ellp_fac=3,
+                           angle_thres=35,eps_thres=0.5,lmin=4,
+                           max_ind=500, use_eps=False):
+    """Function that detects LKFs in temporal slice of deformation rate.
+    LKF binary map is generated for each time slice and all binary maps
+    are combined into one before segments are detected.
+
+    Input: eps_tot       - list of time slices of total deformation rate
+           max_kernel    - maximum kernel size of DoG filter
+           min_kernel    - minimum kernel size of DoG filter
+           dog_thres     - threshold for DoG filtering, pixels that
+                           exceed threshold are marked as LKFs
+           angle_thres   - angle threshold for reconnection
+           ellp_fac      - weighting factor for ellipse
+           dis_thres     - distance threshold for reconnection
+           eps_thres     - threshold difference in deformation rate
+           lmin          - minimum length of segments [in pixel]
+
+    Output: seg - list of detected LKFs"""
+
+    lkf_detect_multday = np.zeros(eps_tot[0].shape)
+
+    for i in range(len(eps_tot)): 
+        if use_eps:
+            proc_eps = eps_tot[i]
+        else:
+            ## Take natural logarithm
+            proc_eps = np.log(eps_tot[i])
+        proc_eps[~np.isfinite(proc_eps)] = np.NaN
+        if not use_eps:
+            ## Apply histogram equalization
+            proc_eps = hist_eq(proc_eps)
+        ## Apply DoG filter
+        lkf_detect = DoG_leads(proc_eps,max_kernel,min_kernel)
+        ### Filter for DoG>0
+        lkf_detect = (lkf_detect > dog_thres).astype('float')
+        lkf_detect[~np.isfinite(proc_eps)] = np.NaN
+        lkf_detect_multday += lkf_detect
+
+    lkf_detect = (lkf_detect_multday > 0)
+
+    ## Apply morphological thinning
+    lkf_thin =  skimage.morphology.skeletonize(lkf_detect).astype('float')
+
+    # Compute average total deformation
+    eps_tot = np.nanmean(np.stack(eps_tot),axis=0)
+
+    # Segment detection
+    seg_f = detect_segments(lkf_thin,max_ind=max_ind) # Returns matrix fill up with NaNs
+    ## Convert matrix to list with arrays containing indexes of points
+    seg = [seg_f[i][:,~np.any(np.isnan(seg_f[i]),axis=0)].astype('int')
+           for i in range(seg_f.shape[0])]
+    # ## Apply inter junction connection
+    # seg = connect_inter_junctions(seg,lkf_thin)
+    ## Filter segments that are only points
+    seg = [i for i in seg if i.size>2]
+
+    # Reconnection of segments
+    eps_mn = compute_mn_eps(np.log10(eps_tot),seg)
+    num_points_segs = np.array([i.size/2. for i in seg])
+    ## Initialize array containing start and end point of segments
+    segs = np.array([np.stack([i[:,0],i[:,-1]]).T for i in seg])
+    
+    seg = seg_reconnection(seg,segs,eps_mn,num_points_segs,1.5,
+                           50,eps_thres,ellp_fac=1)
+
+    # Reconnection of segments
+    eps_mn = compute_mn_eps(np.log10(eps_tot),seg)
+    num_points_segs = np.array([i.size/2. for i in seg])
+    ## Initialize array containing start and end point of segments
+    segs = np.array([np.stack([i[:,0],i[:,-1]]).T for i in seg])
+    
+    seg = seg_reconnection(seg,segs,eps_mn,num_points_segs,dis_thres,
+                           angle_thres,eps_thres,ellp_fac=ellp_fac)
+
+    # Filter too short segments
+    seg = filter_segs_lmin(seg,lmin)
+
+    # Convert to indexes of the original input image
+    seg = [segi+1 for segi in seg]
+
+    return seg

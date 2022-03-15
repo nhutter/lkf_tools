@@ -16,7 +16,7 @@ __author_email__ = "nhutter@uw.edu"
 import numpy as np
 import matplotlib.pylab as plt
 
-from lkf_detection import *
+from .detection import *
 
 
 
