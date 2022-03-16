@@ -15,6 +15,10 @@ and activate the environment:
 ```
 conda activate lkf_tools
 ```
+To install as python package run the following command with the repository directory:
+```
+$ python setup.py develop
+```
 
 ## Generate LKF data-set
 
