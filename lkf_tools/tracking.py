@@ -96,10 +96,10 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
 
         if ~np.any(np.isnan(iseg_d)):
             # Define search area
-            search_area = np.concatenate([np.floor(iseg_d),np.ceil(iseg_d),
-					  np.vstack([np.floor(iseg_d)[:,0],np.ceil(iseg_d)[:,1]]).T,
-					  np.vstack([np.ceil(iseg_d)[:,0],np.floor(iseg_d)[:,1]]).T],
-					 axis=0) # Floor and ceil broken indexes
+            search_area = np.concatenate([np.floor(iseg_d[:,:2]),np.ceil(iseg_d[:,:2]),
+                                          np.vstack([np.floor(iseg_d)[:,0],np.ceil(iseg_d)[:,1]]).T,
+                                          np.vstack([np.ceil(iseg_d)[:,0],np.floor(iseg_d)[:,1]]).T],
+                                         axis=0) # Floor and ceil broken indexes
             # Broadening of search area
             #search_area_expansion = 1 # Number of cell for which the search area is expanded to be consider differences in the morphological thinning
             for i in range(search_area_expansion):
@@ -288,8 +288,8 @@ def drift_estimate(lkf0_path,ncfile,mask,index_x,index_y,red_fac,
 
     # Loop over days
     t_tot = adv_time
-    t = 1.*24.*3600.
-    dt = 1.*24.*3600.
+    #t = 1.*24.*3600.
+    #dt = 1.*24.*3600.
     it0 = int(str(lkf0_path).split('/')[-1].split('.')[0].split("_")[-1])
 
     #lkf0_d = lkf0.copy()

@@ -78,7 +78,7 @@ class process_dataset(object):
             self.dxu  = self.data.DXU
             self.dyu  = self.data.DYV
         else:
-            print("ERROR: DXU and DYU are missing in netcdf file!")
+            print("Warning: DXU and DYU are missing in netcdf file!")
             print("  -->  Compute dxu and dyu from lon,lat using SSMI projection")
             m = mSSMI()
             x,y = m(self.lon,self.lat)
