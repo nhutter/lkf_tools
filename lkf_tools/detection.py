@@ -25,6 +25,7 @@ import scipy.ndimage as ndim
 import skimage.morphology
 
 from .rgps import *
+from ._dir_filter import skeleton_along_max
 
 
 
@@ -102,16 +103,20 @@ def nan_gaussian_filter(field,kernel,truncate):
 
 def DoG_leads(in_array,max_kern,min_kern):
     """DoG: Difference of Gaussian Filters Combination as implemented in Linow & Dierking, 2017"""
-	
+    
     res = np.zeros(in_array.shape)
     c = np.arange(min_kern,max_kern+1)*0.5
-	
-    for i in range(0,c.size-1):
+    
+    # for i in range(0,c.size-1):
 
-        gaus1 = nan_gaussian_filter(in_array,c[i],truncate=2)
-        gaus2 = nan_gaussian_filter(in_array,c[i+1],truncate=2)
-        res += (gaus1 - gaus2)
-	
+    #     gaus1 = nan_gaussian_filter(in_array,c[i],truncate=2)
+    #     gaus2 = nan_gaussian_filter(in_array,c[i+1],truncate=2)
+    #     res += (gaus1 - gaus2)
+    
+    gaus1 = nan_gaussian_filter(in_array,c[0],truncate=2)
+    gaus2 = nan_gaussian_filter(in_array,c[-1],truncate=2)
+    
+    res = (gaus1 - gaus2)
     return res
     
 
@@ -1028,7 +1033,7 @@ def lkf_detect_rgps(filename_rgps,max_kernel=5,min_kernel=1,dog_thres=0,dis_thre
         return seg
 
 
-def lkf_detect_eps(eps_tot,max_kernel=5,min_kernel=1,dog_thres=0,dis_thres=4,ellp_fac=3,angle_thres=35,eps_thres=0.5,lmin=4):
+def lkf_detect_eps(eps_tot,max_kernel=5,min_kernel=1,dog_thres=0,dis_thres=4,ellp_fac=3,angle_thres=35,eps_thres=0.5,lmin=4,skeleton_kernel=0):
     """Function that detects LKFs in input RGPS file.
 
     Input: eps_tot       - total deformation rate
@@ -1055,7 +1060,10 @@ def lkf_detect_eps(eps_tot,max_kernel=5,min_kernel=1,dog_thres=0,dis_thres=4,ell
     lkf_detect = (lkf_detect > dog_thres).astype('float')
     lkf_detect[~np.isfinite(proc_eps)] = np.NaN
     ## Apply morphological thinning
-    lkf_thin =  skimage.morphology.skeletonize(lkf_detect).astype('float')
+    if skeleton_kernel==0:
+        lkf_thin =  skimage.morphology.skeletonize(lkf_detect).astype('float')
+    else:
+        lkf_thin = skeleton_along_max(eps_tot,lkf_detect,kernel_size=skeleton_kernel).astype('float')
 
 
     # Segment detection
@@ -1097,7 +1105,7 @@ def lkf_detect_eps(eps_tot,max_kernel=5,min_kernel=1,dog_thres=0,dis_thres=4,ell
 def lkf_detect_eps_multday(eps_tot,max_kernel=5,min_kernel=1,
                            dog_thres=0,dis_thres=4,ellp_fac=3,
                            angle_thres=35,eps_thres=0.5,lmin=4,
-                           max_ind=500, use_eps=False):
+                           max_ind=500, use_eps=False,skeleton_kernel=0):
     """Function that detects LKFs in temporal slice of deformation rate.
     LKF binary map is generated for each time slice and all binary maps
     are combined into one before segments are detected.
@@ -1135,13 +1143,16 @@ def lkf_detect_eps_multday(eps_tot,max_kernel=5,min_kernel=1,
         lkf_detect_multday += lkf_detect
 
     lkf_detect = (lkf_detect_multday > 0)
-
-    ## Apply morphological thinning
-    lkf_thin =  skimage.morphology.skeletonize(lkf_detect).astype('float')
-
+    
     # Compute average total deformation
     eps_tot = np.nanmean(np.stack(eps_tot),axis=0)
 
+    ## Apply morphological thinning
+    if skeleton_kernel==0:
+        lkf_thin =  skimage.morphology.skeletonize(lkf_detect).astype('float')
+    else:
+        lkf_thin = skeleton_along_max(eps_tot,lkf_detect,kernelsize=skeleton_kernel).astype('float')
+        
     # Segment detection
     seg_f = detect_segments(lkf_thin,max_ind=max_ind) # Returns matrix fill up with NaNs
     ## Convert matrix to list with arrays containing indexes of points

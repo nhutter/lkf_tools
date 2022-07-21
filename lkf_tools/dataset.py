@@ -31,16 +31,18 @@ class process_dataset(object):
     """
     Class to process deformation and drift dataset to LKF data set.
     """
-    def __init__(self,netcdf_file,output_path='./',max_kernel=5,min_kernel=1,
-                 dog_thres=0.01,dis_thres=4,ellp_fac=2,angle_thres=45,
-                 eps_thres=1.25,lmin=3,latlon=True,return_eps=True,red_fac=1,t_red=3):
+    def __init__(self,netcdf_file,output_path='./',xarray=None,
+                 max_kernel=5,min_kernel=1, dog_thres=0.01,skeleton_kernel=0,
+                 dis_thres=4,ellp_fac=2,angle_thres=45,eps_thres=1.25,lmin=3,
+                 latlon=True,return_eps=True,red_fac=1,t_red=3):
         """
         Processes deformation and drift dataset to LKF data set
 
         netcdf_file: expected variables U,V,A in shape (time,x,y)
         """
         # Set output path
-        self.lkfpath = Path(output_path).joinpath(netcdf_file.split('/')[-1].split('.')[0])
+        self.netcdf_file = str(netcdf_file)
+        self.lkfpath = Path(output_path).joinpath(self.netcdf_file.split('/')[-1].split('.')[0])
         lkfpath = '/'
         for lkfpathseg in str(self.lkfpath.absolute()).split('/')[1:]:
             lkfpath += lkfpathseg + '/'
@@ -51,6 +53,7 @@ class process_dataset(object):
         self.max_kernel = max_kernel
         self.min_kernel = min_kernel
         self.dog_thres = dog_thres
+        self.skeleton_kernel = skeleton_kernel
         self.dis_thres = dis_thres
         self.ellp_fac = ellp_fac
         self.angle_thres = angle_thres
@@ -63,8 +66,10 @@ class process_dataset(object):
         
 
         # Read netcdf file
-        self.netcdf_file = netcdf_file
-        self.data = xr.open_dataset(self.netcdf_file)
+        if xarray is None:
+            self.data = xr.open_dataset(self.netcdf_file)
+        else:
+            self.data = xarray
 
         # Store variables
         self.time = self.data.time
@@ -170,7 +175,7 @@ class process_dataset(object):
                                          dog_thres=self.dog_thres,dis_thres=self.dis_thres*self.corfac,
                                          ellp_fac=self.ellp_fac,angle_thres=self.angle_thres,
                                          eps_thres=self.eps_thres,lmin=self.lmin*self.corfac,
-                                         max_ind=500*self.corfac,use_eps=True)
+                                         max_ind=500*self.corfac,use_eps=True,skeleton_kernel=self.skeleton_kernel)
 
             # Save the detected features
 
