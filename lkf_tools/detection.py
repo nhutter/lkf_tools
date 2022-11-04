@@ -1064,7 +1064,8 @@ def lkf_detect_eps(eps_tot,max_kernel=5,min_kernel=1,dog_thres=0,dis_thres=4,ell
         lkf_thin =  skimage.morphology.skeletonize(lkf_detect).astype('float')
     else:
         lkf_thin = skeleton_along_max(eps_tot,lkf_detect,kernel_size=skeleton_kernel).astype('float')
-
+        lkf_thin[:2,:] = 0.; lkf_thin[-2:,:] = 0.
+        lkf_thin[:,:2] = 0.; lkf_thin[:,-2:] = 0.
 
     # Segment detection
     seg_f = detect_segments(lkf_thin) # Returns matrix fill up with NaNs
@@ -1152,6 +1153,8 @@ def lkf_detect_eps_multday(eps_tot,max_kernel=5,min_kernel=1,
         lkf_thin =  skimage.morphology.skeletonize(lkf_detect).astype('float')
     else:
         lkf_thin = skeleton_along_max(eps_tot,lkf_detect,kernelsize=skeleton_kernel).astype('float')
+        lkf_thin[:2,:] = 0.; lkf_thin[-2:,:] = 0.
+        lkf_thin[:,:2] = 0.; lkf_thin[:,-2:] = 0.
         
     # Segment detection
     seg_f = detect_segments(lkf_thin,max_ind=max_ind) # Returns matrix fill up with NaNs
