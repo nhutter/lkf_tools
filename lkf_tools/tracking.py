@@ -319,7 +319,7 @@ def drift_estimate(lkf0_path,ncfile,mask,index_x,index_y,red_fac,
                                       (iseg_d[:,0]<res.shape[0]-2),
                                       (iseg_d[:,1]<res.shape[1]-2)]),axis=0)
             lkf0_d[ilkf] = iseg_d[mask_d,:]
-        lkf0[ilkf] = iseg_d[mask_d,:].astype('int')
+            lkf0[ilkf] = iseg_d[mask_d,:].astype('int')
 
     return lkf0_d
 
