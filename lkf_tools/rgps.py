@@ -57,7 +57,7 @@ def mSSMI():
         as Basemap class 
         ATTENION: for coordinate transform from RGPS coordinate
                   m(0,90) must be added, because in RGPS NP is the origin'''
-    return Proj(proj='stere',lat_0=90, lat_ts=75, lon_0=-45, ellps='WGS84')#Basemap(projection='stere',lat_ts=70,lat_0=90,lon_0=-45,resolution='l',llcrnrlon=279.26-360,llcrnrlat=33.92,urcrnrlon=102.34,urcrnrlat=31.37,ellps='WGS84')
+    return Proj(proj='stere',lat_0=90, lat_ts=70, lon_0=-45, ellps='WGS84')#Basemap(projection='stere',lat_ts=70,lat_0=90,lon_0=-45,resolution='l',llcrnrlon=279.26-360,llcrnrlat=33.92,urcrnrlon=102.34,urcrnrlat=31.37,ellps='WGS84')
 
 
 
