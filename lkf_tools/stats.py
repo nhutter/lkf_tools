@@ -8,7 +8,7 @@ Statistic module of lkf_tools to perform spatial and temporal LKF statistics
 # Package Metadata
 __version__ = 0.1
 __author__ = "Nils Hutter"
-__author_email__ = "nhutter@uw.edu"
+__author_email__ = "nils.hutter@awi.de"
 
 
 import numpy as np

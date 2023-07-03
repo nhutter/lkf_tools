@@ -8,7 +8,7 @@ Routines to process deformation and drift data and generate LKF data set
 # Package Metadata
 __version__ = 0.1
 __author__ = "Nils Hutter"
-__author_email__ = "nhutter@uw.edu"
+__author_email__ = "nils.hutter@awi.de"
 
 
 import numpy as np

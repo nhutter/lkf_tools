@@ -1,3 +1,15 @@
+# -*- coding: utf-8 -*-
+
+"""
+Directional filter routines
+"""
+
+# Package Metadata
+__version__ = 0.1
+__author__ = "Nils Hutter"
+__author_email__ = "nils.hutter@awi.de"
+
+
 from scipy import signal
 import sys
 import numpy as np
@@ -6,6 +18,8 @@ import scipy.ndimage as ndim
 from netCDF4 import Dataset
 import datetime
 import skimage.morphology
+
+
 
 
 # ----------------------- Filter routines -------------------------
