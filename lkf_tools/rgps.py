@@ -6,7 +6,7 @@ All functions used to read and georeference RGPS data.
 
 
 # Package Metadata
-__version__ = 0.1
+__version__ = 2.0
 __author__ = "Nils Hutter"
 __author_email__ = "nils.hutter@awi.de"
 
