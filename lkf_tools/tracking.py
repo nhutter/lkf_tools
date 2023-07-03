@@ -1,7 +1,22 @@
+# -*- coding: utf-8 -*-
+
+"""
+Tracking routines to follow detected LKFs in time using drift data.
+"""
+
+
+# Package Metadata
+__version__ = 2.0
+__author__ = "Nils Hutter"
+__author_email__ = "nils.hutter@awi.de"
+
+
+
+
 import numpy as np
 import matplotlib.pylab as plt
 
-from lkf_detection import *
+from .detection import *
 
 
 
@@ -55,7 +70,7 @@ def compute_MHD_segment(A,B,return_overlap=False,overlap_thres=2,angle_thres=45,
 
 # ------------------- 1. Tracking function 
 
-def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap=False,overlap_thres=1.5,angle_thres=25.):
+def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap=False,overlap_thres=1.5,angle_thres=25.,search_area_expansion=1):
     """Tracking function for LKFs
 
     Input: lkf0_d: advected detected LKF features
@@ -81,12 +96,12 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
 
         if ~np.any(np.isnan(iseg_d)):
             # Define search area
-            search_area = np.concatenate([np.floor(iseg_d),np.ceil(iseg_d),
-					  np.vstack([np.floor(iseg_d)[:,0],np.ceil(iseg_d)[:,1]]).T,
-					  np.vstack([np.ceil(iseg_d)[:,0],np.floor(iseg_d)[:,1]]).T],
-					 axis=0) # Floor and ceil broken indexes
+            search_area = np.concatenate([np.floor(iseg_d[:,:2]),np.ceil(iseg_d[:,:2]),
+                                          np.vstack([np.floor(iseg_d)[:,0],np.ceil(iseg_d)[:,1]]).T,
+                                          np.vstack([np.ceil(iseg_d)[:,0],np.floor(iseg_d)[:,1]]).T],
+                                         axis=0) # Floor and ceil broken indexes
             # Broadening of search area
-            search_area_expansion = 1 # Number of cell for which the search area is expanded to be consider differences in the morphological thinning
+            #search_area_expansion = 1 # Number of cell for which the search area is expanded to be consider differences in the morphological thinning
             for i in range(search_area_expansion):
                 n_rows = search_area[:,0].size
                 search_area = np.concatenate([search_area,
@@ -107,10 +122,17 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
                                               search_area+np.concatenate([-np.ones(n_rows).reshape((n_rows,1)),
                                                                           -np.ones(n_rows).reshape((n_rows,1))],axis=1)],axis=0)
     
-    
-            search_area = np.vstack({tuple(row) for row in search_area})
+            search_area = np.unique(search_area, axis=0)
 
-    
+            search_area = search_area[np.all(search_area>=0,axis=1),:]
+            search_area = search_area[np.all([search_area[:,0]<nx,search_area[:,1]<ny],axis=0),:]
+
+            if np.any(search_area<0):
+                print('Attention negative index')
+
+            # Replaces by new numpy version unique
+            #search_area = np.vstack({tuple(row) for row in search_area})
+            
             # Find area orthogonal to the feature
             ## Perform linear fit to feature
             A = np.transpose(np.array([iseg_d[:,0], np.ones(iseg_d[:,0].shape)]))
@@ -161,7 +183,7 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
         
     
             # Loop over all LKFs to check whether there is overlap with search area
-            for i in range(lkf1.size):
+            for i in range(lkf1.shape[0]):
                 lkf_ravel = []
                 for io in range(lkf1[i].shape[0]):
                     lkf_ravel.append(np.ravel_multi_index(lkf1[i][io,:].astype('int'),
@@ -241,6 +263,66 @@ def drift_estimate_rgps(lkf0_path,drift_path,read_lkf0=None):
     return lkf0_d
 
 
+def drift_estimate(lkf0_path,ncfile,mask,index_x,index_y,red_fac,
+                   dxu,dyu,read_lkf0=None,adv_time=3.*24.*3600.,
+                   t=1.*24.*3600.,dt = 1.*24.*3600.):
+    """Function that computes the position of LKFs after a certain time
+    considering the drift
+
+    Input: lkf0_path  - filename of lkf0 including path
+           drift_path - directory where drift data is stored including prefix
+
+    Output: lkf0_d    - drifted LKFs from lkf0"""
+
+    # Read in lkf0
+    if read_lkf0 is None:
+        lkf0 = np.load(lkf0_path,allow_pickle=True)
+    else:
+        lkf0 = read_lkf0
+
+    if len(lkf0)==1:
+        lkf0 = [lkf0.squeeze()]
+        lkf0_d = [lkf0[0]]
+    else:
+        lkf0_d = lkf0.copy()
+
+    # Loop over days
+    t_tot = adv_time
+    #t = 1.*24.*3600.
+    #dt = 1.*24.*3600.
+    it0 = int(str(lkf0_path).split('/')[-1].split('.')[0].split("_")[-1])
+
+    #lkf0_d = lkf0.copy()
+
+    for i in range(int(t_tot/t)):
+        it = int(it0 + i*t/dt)
+        # Read in drift data
+        drift = np.stack([np.array(ncfile.U[it,1:-1,1:-1]),
+                          np.array(ncfile.V[it,1:-1,1:-1])])
+        
+        # Mask
+        drift[:,~mask[1:-1,1:-1]] = np.nan
+        drift = drift[:,max([0,index_y[0][0]-1]):index_y[0][-1]+2:red_fac,
+                      max([0,index_x[0][0]-1]):index_x[0][-1]+2:red_fac]
+        drift = np.rollaxis(drift,0,3)
+        
+        res = np.stack([dxu,dyu])[:,max([0,index_y[0][0]-1]):index_y[0][-1]+2:red_fac,
+                                  max([0,index_x[0][0]-1]):index_x[0][-1]+2:red_fac]
+        res = np.rollaxis(res,0,3)
+        
+        # Compute drift estimate
+        for ilkf,iseg in enumerate(lkf0):
+            iseg_d = (drift[iseg[:,0].astype('int'),iseg[:,1].astype('int'),:]/
+                      res[iseg[:,0].astype('int'),iseg[:,1].astype('int'),:])/float(red_fac)*t + lkf0_d[ilkf][:,:2]
+            mask_d = np.all(np.stack([np.all(np.isfinite(iseg_d),axis=1),
+                                      np.all(iseg_d>=1,axis=1),
+                                      (iseg_d[:,0]<res.shape[0]-2),
+                                      (iseg_d[:,1]<res.shape[1]-2)]),axis=0)
+            lkf0_d[ilkf] = iseg_d[mask_d,:]
+            lkf0[ilkf] = iseg_d[mask_d,:].astype('int')
+
+    return lkf0_d
+
 
 
 # ------------------- 3. Generate tracking dataset
@@ -258,8 +340,8 @@ def gen_tracking_dataset_rgps(lkf_path,drift_path,output_path):
     lkf_filelist.sort()
     
     for ilkf in range(len(lkf_filelist[:-1])):
-        print "Track features in %s to %s" %(lkf_filelist[ilkf],
-                                             lkf_filelist[ilkf+1])
+        print("Track features in %s to %s" %(lkf_filelist[ilkf],
+                                             lkf_filelist[ilkf+1]))
         # Open lkf0 and compute drift estimate
         lkf0_d = drift_estimate_rgps(lkf_path + lkf_filelist[ilkf],drift_path)
 
@@ -281,3 +363,63 @@ def gen_tracking_dataset_rgps(lkf_path,drift_path,output_path):
                 tracked_pairs)
 
 
+
+def gen_tracking_dataset_sirex(lkf_path,output_path,ncfile,dxu,dyu,
+                               mask,index_x,index_y,red_fac,
+                               adv_time=3.*24.*3600.,continue_comp=False):
+    """Function that generates tracking data set
+
+    Input: lkf_path    - directory including all LKF files for season
+           output_path - directory where output is stored
+           ncfile      - opened netcdf file that stores U and V
+    """
+
+    nx,ny = mask[max([0,index_y[0][0]-1]):index_y[0][-1]+2:red_fac,
+                 max([0,index_x[0][0]-1]):index_x[0][-1]+2:red_fac].shape
+
+    lkf_filelist = [i for i in os.listdir(lkf_path) if i.startswith('lkf') and i.endswith('.npy')]
+    lkf_filelist.sort()
+
+    if continue_comp:
+        tracked_lkfs = [i for i in os.listdir(output_path) if i.startswith('lkf') and i.endswith('.npy')]
+        tracked_lkfs.sort()
+    else:
+        tracked_lkfs = []
+
+    for ilkf in range(len(tracked_lkfs),len(lkf_filelist[:-1])):
+        print("Track features in %s to %s" %(lkf_filelist[ilkf],
+                                             lkf_filelist[ilkf+1]))
+        # Open lkf0 and compute drift estimate
+        lkf0_d = drift_estimate_sirex(lkf_path + lkf_filelist[ilkf],ncfile,mask,
+                                      index_x,index_y,red_fac,dxu,dyu,
+                                      adv_time=adv_time)
+        
+        # Filter zero length LKFs due to NaN drift
+        ind_f   = np.where(np.array([iseg.size for iseg in lkf0_d])>0)[0]
+        lkf0_df = [iseg for iseg in lkf0_d if iseg.size>0]
+
+        # Read LKFs
+        lkf1 = np.load(lkf_path + lkf_filelist[ilkf+1])
+        # lkf1_l = []
+        # for ilkf,iseg in enumerate(lkf1):
+        #     lkf1_l.append(iseg[:,:2])
+        lkf1_l = lkf1
+        if len(lkf1_l)==1:
+            #lkf1_l = np.array([lkf1.squeeze()],dtype='object')
+            lkf1_l = [lkf1.squeeze()]
+        for ilkf1,iseg in enumerate(lkf1):
+            lkf1_l[ilkf1] = iseg[:,:2]
+
+        # Compute tracking
+        tracked_pairs = track_lkf(lkf0_df, lkf1_l, nx, ny, thres_frac=0.75, min_overlap=4,overlap_thres=1.5,angle_thres=25)
+        
+        if len(tracked_pairs)==0:
+            tracked_pairs = np.array([[],[]])
+        else:
+            tracked_pairs = np.stack(tracked_pairs)
+            tracked_pairs[:,0] = ind_f[np.stack(tracked_pairs)[:,0]]
+
+        # Save tracked pairs
+        np.save(output_path + 'lkf_tracked_pairs_%s_to_%s' %(lkf_filelist[ilkf][4:-4],
+                                                             lkf_filelist[ilkf+1][4:-4]),
+                tracked_pairs)

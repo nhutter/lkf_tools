@@ -1,17 +1,31 @@
+# -*- coding: utf-8 -*-
+
+"""
+Detection routines to detect LKF in deformation data.
+"""
+
+
+# Package Metadata
+__version__ = 2.0
+__author__ = "Nils Hutter"
+__author_email__ = "nils.hutter@awi.de"
+
+
 import numpy as np
 import matplotlib.pylab as plt
 import os
 import sys
 from multiprocessing import Pool
 import warnings
-from mpl_toolkits.basemap import Basemap
+#from mpl_toolkits.basemap import Basemap # need to be replaced!
 
 
 # Packages for image processing
 import scipy.ndimage as ndim
 import skimage.morphology
 
-
+from .rgps import *
+from ._dir_filter import skeleton_along_max
 
 
 
@@ -89,16 +103,20 @@ def nan_gaussian_filter(field,kernel,truncate):
 
 def DoG_leads(in_array,max_kern,min_kern):
     """DoG: Difference of Gaussian Filters Combination as implemented in Linow & Dierking, 2017"""
-	
+    
     res = np.zeros(in_array.shape)
     c = np.arange(min_kern,max_kern+1)*0.5
-	
-    for i in range(0,c.size-1):
+    
+    # for i in range(0,c.size-1):
 
-        gaus1 = nan_gaussian_filter(in_array,c[i],truncate=2)
-        gaus2 = nan_gaussian_filter(in_array,c[i+1],truncate=2)
-        res += (gaus1 - gaus2)
-	
+    #     gaus1 = nan_gaussian_filter(in_array,c[i],truncate=2)
+    #     gaus2 = nan_gaussian_filter(in_array,c[i+1],truncate=2)
+    #     res += (gaus1 - gaus2)
+    
+    gaus1 = nan_gaussian_filter(in_array,c[0],truncate=2)
+    gaus2 = nan_gaussian_filter(in_array,c[-1],truncate=2)
+    
+    res = (gaus1 - gaus2)
     return res
     
 
@@ -132,7 +150,7 @@ def nanmean_neighbours(img):
 
     
 
-def detect_segments(lkf_thin,eps_thres=0.1):
+def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
     """ Function to detect segments of LKFs in thinned binary field
     The aim of this function is to split the binary field into 
     multiple smaller segments, and guarantee that all points in a
@@ -180,7 +198,7 @@ def detect_segments(lkf_thin,eps_thres=0.1):
     # Loop parameters
     num_nodetect = np.sum(nodetect) # Number of undetected pixels
     ind = 0 # Index of detection iteration
-    max_ind = 500 # Maximum number of iterations
+    max_ind = max_ind # Maximum number of iterations
 
     angle_point_thres = 5 # Number of last point in segment to compute the critical angel to break segments
 
@@ -268,33 +286,59 @@ def detect_segments(lkf_thin,eps_thres=0.1):
                 new_starts = np.append(new_starts,neigh_deactivate[new_starts_deact_ind].reshape((new_starts_deact_ind.size,2)),axis=0)
                 nodetect[new_starts[:,0].astype('int'),new_starts[:,1].astype('int')] = 0
                 nodetect_intm[1:-1,1:-1] = nodetect.copy()
+                # if ind<5:
+                #     print(new_starts.shape)
+                #     print(new_starts)
+                #     print(deactivate_segs_muln.shape)
+                #     print(deactivate_segs_muln)
+
+                
+
+        # Test for segements that are on the same point
+        nan_mask_segs = np.all(~np.isnan(seg_append),axis=-1)
         
+        ravel_seg_append = np.ravel_multi_index((seg_append[nan_mask_segs,0].astype('int'),
+                                                 seg_append[nan_mask_segs,1].astype('int')),
+                                                lkf_thin[1:-1,1:-1].shape)
+        seg_head_unique, seg_head_counts = np.unique(ravel_seg_append,return_counts=True)
+        deactivate_segs_samehead = np.empty((0,))
+        seg_head_continue = seg_head_unique[seg_head_counts==1]
+
+        if np.any(seg_head_counts>1):
+            deactivate_segs_samehead = np.hstack([np.where(ravel_seg_append==ihead)
+                                                  for ihead in seg_head_unique[seg_head_counts>1]]).squeeze()
+            new_starts = np.concatenate([new_starts,np.vstack(np.unravel_index(seg_head_unique[seg_head_counts>1],
+                                                                               lkf_thin[1:-1,1:-1].shape)).T])
+        #print(deactivate_segs_samehead)
+
+
         # Remove sharp turns from seg_append (here because search for new starting points
         # needs to run beforehand)
         if seg.shape[-1]>1:
             seg_append[np.sum(np.abs(dx),axis=1)>1,:] = np.NaN # Remove from appending list
 
 
+
         # Plot intermediate results
-        if ind%20==0:
+        if ind<5:#ind%5==0:
             do_plot = False
         else:
             do_plot = False
         
         if do_plot:
-            plt.figure()
-            plt.pcolormesh(num_neighbours.copy())
+            fig,ax = plt.subplots(1,2,sharex=True,sharey=True,figsize=(9,5),tight_layout=True)
+            ax[0].pcolormesh(num_neighbours.copy())
             for i in range(seg.shape[0]):
                 if np.any(active_detection==i):
                     col = 'r'
                 else:
                     col = 'g'
-                plt.plot(seg[i,1,:]+0.5,seg[i,0,:]+0.5,col)
-                plt.text(seg[i,1,~np.isnan(seg[i,1,:])][-1]+0.5,seg[i,0,~np.isnan(seg[i,1,:])][-1]+0.5,'%i' %i,color='w')
+                ax[0].plot(seg[i,1,:]+0.5,seg[i,0,:]+0.5,col)
+                ax[0].text(seg[i,1,~np.isnan(seg[i,1,:])][-1]+0.5,seg[i,0,~np.isnan(seg[i,1,:])][-1]+0.5,'%i' %i,color='w')
             for i in range(neigh_deactivate.shape[0]):
-                plt.plot(neigh_deactivate[i,1]+0.5,neigh_deactivate[i,0]+0.5,'m.')
+                ax[0].plot(neigh_deactivate[i,1]+0.5,neigh_deactivate[i,0]+0.5,'m.')
             for i in range(new_starts.shape[0]):
-                plt.plot(new_starts[i,1]+0.5,new_starts[i,0]+0.5,'c.')
+                ax[0].plot(new_starts[i,1]+0.5,new_starts[i,0]+0.5,'c.')
             for i in range(active_detection.size):
                 if np.any(deactivate_segs_end.copy()==i):
                     mark = 'x'
@@ -302,23 +346,25 @@ def detect_segments(lkf_thin,eps_thres=0.1):
                     mark = 'v'
                 elif np.any(deactivate_segs_muln.copy()==i):
                     mark = 's'
+                elif np.any(deactivate_segs_samehead.copy()==i):
+                    mark = '>'
                 else:
                     mark = '.'
                 if ~np.isnan(seg_append[i,1]):
-                    plt.plot(seg_append[i,1]+0.5,seg_append[i,0]+0.5,color='r',marker=mark)
+                    ax[0].plot(seg_append[i,1]+0.5,seg_append[i,0]+0.5,color='r',marker=mark)
                 else:
-                    plt.plot(seg[active_detection[i],1,-1]+0.5,seg[active_detection[i],0,-1]+0.5,color='r',marker=mark)
+                    ax[0].plot(seg[active_detection[i],1,-1]+0.5,seg[active_detection[i],0,-1]+0.5,color='r',marker=mark)
             
 
-            plt.figure()
-            plt.pcolormesh(nodetect.copy()+lkf_thin[1:-1,1:-1])
+            #plt.figure()
+            ax[1].pcolormesh(nodetect.copy()+lkf_thin[1:-1,1:-1])
             for i in range(seg.shape[0]):
                 if np.any(active_detection==i):
                     col = 'r'
                 else:
                     col = 'g'
-                plt.plot(seg[i,1,:]+0.5,seg[i,0,:]+0.5,col)
-                plt.text(seg[i,1,~np.isnan(seg[i,1,:])][-1]+0.5,seg[i,0,~np.isnan(seg[i,1,:])][-1]+0.5,'%i' %i,color='w')
+                ax[1].plot(seg[i,1,:]+0.5,seg[i,0,:]+0.5,col)
+                ax[1].text(seg[i,1,~np.isnan(seg[i,1,:])][-1]+0.5,seg[i,0,~np.isnan(seg[i,1,:])][-1]+0.5,'%i' %i,color='w')
             for i in range(active_detection.size):
                 if np.any(deactivate_segs_end.copy()==i):
                     mark = 'x'
@@ -326,23 +372,35 @@ def detect_segments(lkf_thin,eps_thres=0.1):
                     mark = 'v'
                 elif np.any(deactivate_segs_muln.copy()==i):
                     mark = 's'
+                elif np.any(deactivate_segs_samehead.copy()==i):
+                    mark = 'd'
                 else:
                     mark = '.'
                 if ~np.isnan(seg_append[i,1]):
-                    plt.plot(seg_append[i,1]+0.5,seg_append[i,0]+0.5,color='r',marker=mark)
+                    ax[1].plot(seg_append[i,1]+0.5,seg_append[i,0]+0.5,color='r',marker=mark)
                 else:
-                    plt.plot(seg[active_detection[i],1,-1]+0.5,seg[active_detection[i],0,-1]+0.5,color='r',marker=mark)
+                    ax[1].plot(seg[active_detection[i],1,-1]+0.5,seg[active_detection[i],0,-1]+0.5,color='r',marker=mark)
 
+            ax[0].set_xlim([380,395])
+            ax[0].set_ylim([180,197])
+            for iax in ax: iax.set_aspect('equal')
+
+
+        
+            
         # Test for multiple times same start
         new_starts_unique, new_starts_counts = np.unique(np.ravel_multi_index((new_starts[:,0].astype('int'),
                                                                                new_starts[:,1].astype('int')),
                                                                               lkf_thin[1:-1,1:-1].shape),
                                                          return_counts=True)
-        if np.any(new_starts_counts > 1):
-            # print 'Warning: %i starting points arises maximum %i-times' %(np.sum(new_starts_counts>1),
-            #                                                               np.max(new_starts_counts))
-            new_starts = np.vstack(np.unravel_index(new_starts_unique,lkf_thin[1:-1,1:-1].shape)).T
-
+        
+        new_starts_unique = np.array([i_seg_start for i_seg_start in new_starts_unique if not np.any(seg_head_unique==i_seg_start)],dtype='int')
+        
+        # if np.any(new_starts_counts > 1):
+        #     # print 'Warning: %i starting points arises maximum %i-times' %(np.sum(new_starts_counts>1),
+        #     #                                                               np.max(new_starts_counts))
+        #     new_starts = np.vstack(np.unravel_index(new_starts_unique,lkf_thin[1:-1,1:-1].shape)).T
+        new_starts = np.vstack(np.unravel_index(new_starts_unique,lkf_thin[1:-1,1:-1].shape)).T
                 
         # Append new positions of this detection step
         num_new_starts = new_starts.shape[0]
@@ -360,10 +418,13 @@ def detect_segments(lkf_thin,eps_thres=0.1):
         active_detection_old = active_detection.copy()
         if np.any([(deactivate_segs_muln.size > 0),
                    (deactivate_segs_ang.size > 0),
-                   (deactivate_segs_end.size > 0)]):
+                   (deactivate_segs_end.size > 0),
+                   (deactivate_segs_samehead.size > 0)]):
             deactivate_segs = np.unique(np.append(deactivate_segs_muln,
                                                   np.append(deactivate_segs_ang,deactivate_segs_end)))
-            active_detection = np.delete(active_detection,deactivate_segs) # remove from active list
+            deactivate_segs = np.unique(np.hstack([deactivate_segs_muln,deactivate_segs_ang,
+                                                   deactivate_segs_end,deactivate_segs_samehead]))
+            active_detection = np.delete(active_detection,deactivate_segs.astype('int')) # remove from active list
 
         # Activate new segments that started in this iteration
         active_detection = np.append(active_detection,np.arange(seg_old_shape, seg_old_shape + num_new_starts))
@@ -851,55 +912,6 @@ def seg_reconnection(seg,segs,eps_segs,num_points_segs,dis_thres,angle_thres,eps
 
 
 
-# --------------- 4. RGPS related functions ----------------------------
-# ----------------------------------------------------------------------
-
-
-
-def read_RGPS(filename,land_fill=1e10,nodata_fill=1e20):
-    RGPS_file = open(filename,'r')
-    
-    # RGPS product header 
-    dxg=0. #Size of x cell in product
-    dyg=0. #Size of y cell in product
-    xg0=0. #Map location of x lower left
-    yg0=0. #Map location of y lower left
-    xg1=0. #Map location of x higher right
-    yg1=0. #Map location of y higher right
-    nxcell=0 #x cells dimensional array
-    nycell=0 #y cells dimensional array
-
-    dxg,dyg,xg0,yg0,xg1,yg1 = RGPS_file.readline().strip().split()
-    nxcell,nycell = RGPS_file.readline().strip().split()
-
-    data = np.fromfile(RGPS_file,np.float32).reshape(int(nycell),int(nxcell))
-
-    if sys.byteorder == 'little': data.byteswap(True)
-
-    data[data==1e10] = land_fill
-    data[data==1e20] = nodata_fill
-
-    return data, float(xg0), float(xg1), float(yg0), float(yg1), int(nxcell), int(nycell)
-
-def mSSMI():
-    ''' Returns the SSMI grid projection used for RGPS data
-        as Basemap class 
-        ATTENION: for coordinate transform from RGPS coordinate
-                  m(0,90) must be added, because in RGPS NP is the origin'''
-    return Basemap(projection='stere',lat_ts=70,lat_0=90,lon_0=-45,resolution='l',llcrnrlon=279.26-360,llcrnrlat=33.92,urcrnrlon=102.34,urcrnrlat=31.37,ellps='WGS84')
-
-
-
-def get_latlon_RGPS(xg0,xg1,yg0,yg1,nxcell,nycell,m=mSSMI()):
-    # Gives only rough estimate, better use SSM/I POLAR STEREOGRAPHIC PROJECTION
-    x = np.linspace(xg0,xg1,nxcell+1); x = 0.5*(x[1:]+x[:-1])
-    y = np.linspace(yg0,yg1,nycell+1); y = 0.5*(y[1:]+y[:-1])
-    x,y = np.meshgrid(x,y)
-    xpol,ypol = m(0,90)
-    lon,lat = m(x*1e3 + xpol, y*1e3 + ypol,inverse=True)
-    return lon, lat
-
-
 
 
 
@@ -929,6 +941,21 @@ def segs2latlon_rgps(segs,xg0,xg1,yg0,yg1,nxcell,nycell,m=mSSMI()):
                                      axis=0))
     return segsf
 
+
+def segs2latlon_model(segs,lon,lat):
+    """ Function that converts index format of detected LKFs to
+    lat,lon coordinates
+    """
+    segsf = []
+    for iseg in segs:
+        segsf.append(np.concatenate([iseg,
+                                     np.stack([lon[iseg[0],iseg[1]],
+                                               lat[iseg[0],iseg[1]]])],
+                                     axis=0))
+    return segsf
+
+
+
 def segs2eps(segs,epsI,epsII):
     """ Function that saves for each point of each LKF the deformation
     rates and attach them to segs.
@@ -942,8 +969,23 @@ def segs2eps(segs,epsI,epsII):
                                                      iseg[1].astype('int')]])],
                                      axis=0))
     return segsf
+   
     
-    
+def segs2epsvor(segs,epsI,epsII,epsvor):
+    """ Function that saves for each point of each LKF the deformation
+    rates and attach them to segs (including vorticity!).
+    """
+    segsf = []
+    for iseg in segs:
+        segsf.append(np.concatenate([iseg,
+                                     np.stack([epsI[iseg[0].astype('int'),
+                                                    iseg[1].astype('int')],
+                                               epsII[iseg[0].astype('int'),
+                                                     iseg[1].astype('int')],
+                                               epsvor[iseg[0].astype('int'),
+                                                     iseg[1].astype('int')]])],
+                                     axis=0))
+    return segsf
 
 
 
@@ -991,7 +1033,7 @@ def lkf_detect_rgps(filename_rgps,max_kernel=5,min_kernel=1,dog_thres=0,dis_thre
         return seg
 
 
-def lkf_detect_eps(eps_tot,max_kernel=5,min_kernel=1,dog_thres=0,dis_thres=4,ellp_fac=3,angle_thres=35,eps_thres=0.5,lmin=4):
+def lkf_detect_eps(eps_tot,max_kernel=5,min_kernel=1,dog_thres=0,dis_thres=4,ellp_fac=3,angle_thres=35,eps_thres=0.5,lmin=4,skeleton_kernel=0):
     """Function that detects LKFs in input RGPS file.
 
     Input: eps_tot       - total deformation rate
@@ -1018,8 +1060,12 @@ def lkf_detect_eps(eps_tot,max_kernel=5,min_kernel=1,dog_thres=0,dis_thres=4,ell
     lkf_detect = (lkf_detect > dog_thres).astype('float')
     lkf_detect[~np.isfinite(proc_eps)] = np.NaN
     ## Apply morphological thinning
-    lkf_thin =  skimage.morphology.skeletonize(lkf_detect).astype('float')
-
+    if skeleton_kernel==0:
+        lkf_thin =  skimage.morphology.skeletonize(lkf_detect).astype('float')
+    else:
+        lkf_thin = skeleton_along_max(eps_tot,lkf_detect,kernel_size=skeleton_kernel).astype('float')
+        lkf_thin[:2,:] = 0.; lkf_thin[-2:,:] = 0.
+        lkf_thin[:,:2] = 0.; lkf_thin[:,-2:] = 0.
 
     # Segment detection
     seg_f = detect_segments(lkf_thin) # Returns matrix fill up with NaNs
@@ -1055,3 +1101,93 @@ def lkf_detect_eps(eps_tot,max_kernel=5,min_kernel=1,dog_thres=0,dis_thres=4,ell
 
     return seg
 
+
+
+def lkf_detect_eps_multday(eps_tot,max_kernel=5,min_kernel=1,
+                           dog_thres=0,dis_thres=4,ellp_fac=3,
+                           angle_thres=35,eps_thres=0.5,lmin=4,
+                           max_ind=500, use_eps=False,skeleton_kernel=0):
+    """Function that detects LKFs in temporal slice of deformation rate.
+    LKF binary map is generated for each time slice and all binary maps
+    are combined into one before segments are detected.
+
+    Input: eps_tot       - list of time slices of total deformation rate
+           max_kernel    - maximum kernel size of DoG filter
+           min_kernel    - minimum kernel size of DoG filter
+           dog_thres     - threshold for DoG filtering, pixels that
+                           exceed threshold are marked as LKFs
+           angle_thres   - angle threshold for reconnection
+           ellp_fac      - weighting factor for ellipse
+           dis_thres     - distance threshold for reconnection
+           eps_thres     - threshold difference in deformation rate
+           lmin          - minimum length of segments [in pixel]
+
+    Output: seg - list of detected LKFs"""
+
+    lkf_detect_multday = np.zeros(eps_tot[0].shape)
+
+    for i in range(len(eps_tot)): 
+        if use_eps:
+            proc_eps = eps_tot[i]
+        else:
+            ## Take natural logarithm
+            proc_eps = np.log(eps_tot[i])
+        proc_eps[~np.isfinite(proc_eps)] = np.NaN
+        if not use_eps:
+            ## Apply histogram equalization
+            proc_eps = hist_eq(proc_eps)
+        ## Apply DoG filter
+        lkf_detect = DoG_leads(proc_eps,max_kernel,min_kernel)
+        ### Filter for DoG>0
+        lkf_detect = (lkf_detect > dog_thres).astype('float')
+        lkf_detect[~np.isfinite(proc_eps)] = np.NaN
+        lkf_detect_multday += lkf_detect
+
+    lkf_detect = (lkf_detect_multday > 0)
+    
+    # Compute average total deformation
+    eps_tot = np.nanmean(np.stack(eps_tot),axis=0)
+
+    ## Apply morphological thinning
+    if skeleton_kernel==0:
+        lkf_thin =  skimage.morphology.skeletonize(lkf_detect).astype('float')
+    else:
+        lkf_thin = skeleton_along_max(eps_tot,lkf_detect,kernelsize=skeleton_kernel).astype('float')
+        lkf_thin[:2,:] = 0.; lkf_thin[-2:,:] = 0.
+        lkf_thin[:,:2] = 0.; lkf_thin[:,-2:] = 0.
+        
+    # Segment detection
+    seg_f = detect_segments(lkf_thin,max_ind=max_ind) # Returns matrix fill up with NaNs
+    ## Convert matrix to list with arrays containing indexes of points
+    seg = [seg_f[i][:,~np.any(np.isnan(seg_f[i]),axis=0)].astype('int')
+           for i in range(seg_f.shape[0])]
+    # ## Apply inter junction connection
+    # seg = connect_inter_junctions(seg,lkf_thin)
+    ## Filter segments that are only points
+    seg = [i for i in seg if i.size>2]
+
+    # Reconnection of segments
+    eps_mn = compute_mn_eps(np.log10(eps_tot),seg)
+    num_points_segs = np.array([i.size/2. for i in seg])
+    ## Initialize array containing start and end point of segments
+    segs = np.array([np.stack([i[:,0],i[:,-1]]).T for i in seg])
+    
+    seg = seg_reconnection(seg,segs,eps_mn,num_points_segs,1.5,
+                           50,eps_thres,ellp_fac=1)
+
+    # Reconnection of segments
+    eps_mn = compute_mn_eps(np.log10(eps_tot),seg)
+    num_points_segs = np.array([i.size/2. for i in seg])
+    ## Initialize array containing start and end point of segments
+    segs = np.array([np.stack([i[:,0],i[:,-1]]).T for i in seg])
+    
+    seg = seg_reconnection(seg,segs,eps_mn,num_points_segs,dis_thres,
+                           angle_thres,eps_thres,ellp_fac=ellp_fac)
+
+    # Filter too short segments
+    seg = filter_segs_lmin(seg,lmin)
+
+    # Convert to indexes of the original input image
+    seg = [segi+1 for segi in seg]
+
+    return seg

@@ -1,8 +1,80 @@
+# -*- coding: utf-8 -*-
+
+"""
+All functions used to read and georeference RGPS data.
+"""
+
+
+# Package Metadata
+__version__ = 2.0
+__author__ = "Nils Hutter"
+__author_email__ = "nils.hutter@awi.de"
+
+
 import numpy as np
-import sys
-from mpl_toolkits.basemap import Basemap
+import matplotlib.pylab as plt
 import os
-import rw as rw
+import sys
+from multiprocessing import Pool
+import warnings
+#from mpl_toolkits.basemap import Basemap # need to be replaced!
+from pyproj import Proj
+
+
+# --------------- 1. RGPS read and georeference functions --------------
+# ----------------------------------------------------------------------
+
+
+
+def read_RGPS(filename,land_fill=1e10,nodata_fill=1e20):
+    RGPS_file = open(filename,'r',encoding= 'unicode_escape')
+    
+    # RGPS product header 
+    dxg=0. #Size of x cell in product
+    dyg=0. #Size of y cell in product
+    xg0=0. #Map location of x lower left
+    yg0=0. #Map location of y lower left
+    xg1=0. #Map location of x higher right
+    yg1=0. #Map location of y higher right
+    nxcell=0 #x cells dimensional array
+    nycell=0 #y cells dimensional array
+
+    dxg,dyg,xg0,yg0,xg1,yg1 = RGPS_file.readline().strip().split()
+    nxcell,nycell = RGPS_file.readline().strip().split()
+
+    data = np.fromfile(RGPS_file,np.float32).reshape(int(nycell),int(nxcell))
+
+    if sys.byteorder == 'little': data.byteswap(True)
+
+    data[data==1e10] = land_fill
+    data[data==1e20] = nodata_fill
+
+    return data, float(xg0), float(xg1), float(yg0), float(yg1), int(nxcell), int(nycell)
+
+
+def mSSMI():
+    ''' Returns the SSMI grid projection used for RGPS data
+        as Basemap class 
+        ATTENION: for coordinate transform from RGPS coordinate
+                  m(0,90) must be added, because in RGPS NP is the origin'''
+    return Proj(proj='stere',lat_0=90, lat_ts=70, lon_0=-45, ellps='WGS84')#Basemap(projection='stere',lat_ts=70,lat_0=90,lon_0=-45,resolution='l',llcrnrlon=279.26-360,llcrnrlat=33.92,urcrnrlon=102.34,urcrnrlat=31.37,ellps='WGS84')
+
+
+
+def get_latlon_RGPS(xg0,xg1,yg0,yg1,nxcell,nycell,m=mSSMI()):
+    # Gives only rough estimate, better use SSM/I POLAR STEREOGRAPHIC PROJECTION
+    x = np.linspace(xg0,xg1,nxcell+1); x = 0.5*(x[1:]+x[:-1])
+    y = np.linspace(yg0,yg1,nycell+1); y = 0.5*(y[1:]+y[:-1])
+    x,y = np.meshgrid(x,y)
+    #xpol,ypol = m(0,90)
+    #lon,lat = m(x*1e3 + xpol, y*1e3 + ypol,inverse=True)
+    lon,lat = m(x*1e3, y*1e3,inverse=True)
+    return lon, lat
+
+
+
+# --------------- 1. lagranian RGPS read and interpolate functions -----
+# ----------------------------------------------------------------------
 
 
 
@@ -184,7 +256,7 @@ def get_icemotion_RGPS(RGPS_path,stream='None'):
     # Test for double mentioning of grid IDs
     if np.unique(gid).size != gid.size:
         gcids,n_gcids = np.unique(gid,return_index=True)
-        print 'ERROR: grid cell IDs: ' + str(gcids[n_gcids!=1]) + ' are more than once in the dataset'
+        print('ERROR: grid cell IDs: ' + str(gcids[n_gcids!=1]) + ' are more than once in the dataset')
 
     return motion_data
 
@@ -209,7 +281,7 @@ def get_icemotion_RGPS_season(season_path,stream='None'):
             imonth = np.where(np.array(month_path)==month_rgps[im])[0][0]
             break
 
-    print 'Read last month available for season: ' + month_path[imonth]
+    print('Read last month available for season: ' + month_path[imonth])
     motion_data = []
     if stream != 'None':
         motion_data += get_icemotion_RGPS(season_path + month_path[imonth],stream=stream)
@@ -238,3 +310,4 @@ def get_icemotion_RGPS_season(season_path,stream='None'):
 
     return icemotion_data
     
+
