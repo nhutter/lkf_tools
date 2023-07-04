@@ -123,7 +123,7 @@ class lkf_dataset(object):
         if m is None:
             #m = Basemap(projection='stere',lat_ts=70,lat_0=90,lon_0=-45,resolution='l',
             #            llcrnrlon=-115,llcrnrlat=64,urcrnrlon=105,urcrnrlat=65,ellps='WGS84')
-            m = Proj(proj='stere',lat_0=90, lat_ts=75, lon_0=-45, ellps='WGS84')
+            m = Proj(proj='stere',lat_0=90, lat_ts=70, lon_0=-45, ellps='WGS84')
         self.m = m
 
         
@@ -387,3 +387,62 @@ class lkf_dataset(object):
         self.orientation  = None
         self.lifetime     = None
         self.growthrate   = None
+
+
+    def write2tex(self,output_path,output_name):
+        """
+        Function to output the LKF dataset as one textfile per year
+        """
+        for iyear in range(len(self.years)):
+            print('Write output file: %s%s_%s.txt' %(output_path,output_name,self.years[iyear]))
+            output_file = open('%s%s_%s.txt' %(output_path,output_name,self.years[iyear]),'w')
+
+            # Write header
+            output_file.write('Start_Year\tStart_Month\tStart_Day\tEnd_Year\tEnd_Month\tEnd_Day\tDate(RGPS_format)\tLKF_No.\tParent_LKF_No.\tind_x\tind_y\tlon\tlat\tdivergence_rate\tshear_rate\n')
+    
+            # Loop over days
+            id_year = []
+            id_c    = 1
+            for iday in range(len(self.lkf_dataset[iyear])):
+                id_day = []
+                # Loop over LKFs
+                for ilkf in range(len(self.lkf_dataset[iyear][iday])):
+                    # Determine LKF ID
+                    id_lkf = int(np.copy(id_c)); 
+                    id_c+=1
+                    if iday!=0:
+                        if self.lkf_track_data[iyear][iday-1].size>0:
+                            if np.any(self.lkf_track_data[iyear][iday-1][:,1]==ilkf):
+                                id_parent = ','.join([str(id_year[-1][int(it)]) for it in self.lkf_track_data[iyear][iday-1][:,0][self.lkf_track_data[iyear][iday-1][:,1]==ilkf]])
+                            else:
+                                id_parent = '0'
+                        else:
+                            id_parent = '0'
+                    else:
+                        id_parent = '0'
+
+                    # Loop over all points of LKF and write data to file
+                    for ip in range(self.lkf_dataset[iyear][iday][ilkf].shape[0]):
+                        output_file.write('\t'.join([self.lkf_meta[iyear][iday][0].strftime('%Y'),
+                                                     self.lkf_meta[iyear][iday][0].strftime('%m'),
+                                                     self.lkf_meta[iyear][iday][0].strftime('%d'),
+                                                     self.lkf_meta[iyear][iday][1].strftime('%Y'),
+                                                     self.lkf_meta[iyear][iday][1].strftime('%m'),
+                                                     self.lkf_meta[iyear][iday][1].strftime('%d'),
+                                                     '_'.join([self.lkf_meta[iyear][iday][idate].strftime('%Y%j') for idate in [0,1]]),
+                                                     '%i' %id_lkf,
+                                                     id_parent,
+                                                     '%i' %self.lkf_dataset[iyear][iday][ilkf][ip,0],
+                                                     '%i' %self.lkf_dataset[iyear][iday][ilkf][ip,1],
+                                                     '%.020e' %self.lkf_dataset[iyear][iday][ilkf][ip,2],
+                                                     '%.020e' %self.lkf_dataset[iyear][iday][ilkf][ip,3],
+                                                     '%.020e' %self.lkf_dataset[iyear][iday][ilkf][ip,4],
+                                                     '%.020e\n' %self.lkf_dataset[iyear][iday][ilkf][ip,5]]))
+                        
+                    id_day.append(id_c)
+            
+                id_year.append(id_day)
+                
+            output_file.close()
+
+
