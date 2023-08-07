@@ -27,7 +27,8 @@ from .rgps import *
 
 
 
-class process_dataset(object):
+
+class lkf_dataset(object):
     """
     Class to process deformation and drift dataset to LKF data set.
     """
@@ -99,6 +100,21 @@ class process_dataset(object):
                 ((self.lon >= 100) & (self.lat >= 70)))
         self.index_x = np.where(np.sum(self.mask[1:-1,1:-1],axis=0)>0)
         self.index_y = np.where(np.sum(self.mask[1:-1,1:-1],axis=1)>0)
+        
+        
+        # Check for deformation rates in netcdf
+        if not (hasattr(self.data,'div') and hasattr(self.data,'shr') and hasattr(self.data,'vor')):
+            self.data['div'] = self.data['U']*np.nan
+            self.data['shr'] = self.data['U']*np.nan
+            self.data['vor'] = self.data['U']*np.nan
+        
+        # Initialize LKF and tracked LKF fields
+        self.lkfs = np.empty((int(np.ceil(self.data.time.size/self.t_red))),dtype='object')
+        self.timesteps_detected = np.zeros((int(np.ceil(self.data.time.size/self.t_red)))).astype('bool')
+        self.tracked_lkfs = np.empty((int(np.ceil(self.data.time.size/self.t_red))),
+                                     dtype='object')
+        self.data['lkfs'] = self.data['U']*np.nan
+        self.data['tracked_lkfs'] = self.data['U']*np.nan
 
 
     def detect_lkfs(self,indexes=None,force_redetect=False):
@@ -145,8 +161,11 @@ class process_dataset(object):
                     dvdy = ((vice[:,2:]-vice[:,:-2])/(self.dyu[:,:-2]+self.dyu[:,1:-1]))[1:-1,:]
 
                     div = (dudx + dvdy) * 3600. *24. # in day^-1
+                    self.data.div[it+itr,:,:] = div
                     shr = np.sqrt((dudx-dvdy)**2 + (dudy + dvdx)**2) * 3600. *24. # in day^-1
+                    self.data.shr[it+itr,:,:] = shr
                     vor = 0.5*(dudy-dvdx) * 3600. *24. # in day^-1
+                    self.data.vor[it+itr,:,:] = vor
 
                 eps_tot = np.sqrt(div**2+shr**2)
 
@@ -196,6 +215,15 @@ class process_dataset(object):
 
             lkf_T = [j.T for j in lkf]
             np.save(self.lkfpath.joinpath('lkf_%s_%03i.npy' %(self.netcdf_file.split('/')[-1].split('.')[0],(it+1))), lkf_T)
+            
+            # Store lkf in object
+            self.lkfs[it+itr] = lkf
+            self.timesteps_detected[it] = True
+            
+            # Store lkf in xarray
+            for inum, ilkf in enumerate(lkf):
+                for ix,iy in zip(ilkf[1,:].astype('int'),ilkf[0,:].astype('int')):
+                    self.data.lkfs[it+itr,iy+self.index_y[0][0],ix+self.index_x[0][0]] = inum
             
             
             
@@ -273,3 +301,17 @@ class process_dataset(object):
             np.save(self.track_output_path.joinpath('lkf_tracked_pairs_%s_to_%s' %(self.lkf_filelist[ilkf][4:-4],
                                                                  self.lkf_filelist[ilkf+1][4:-4])),
                     tracked_pairs)
+            
+            
+    def density(self):
+        return (self.data.lkfs[self.timesteps_detected,:,:].notnull().sum(axis=0)/
+                self.data.div[self.timesteps_detected,:,:].notnull().sum(axis=0))
+            
+            
+            
+class process_dataset(lkf_dataset):
+    def __init__(self,*args,**kwargs):
+        super(process_dataset,self).__init__(*args,**kwargs)
+        
+        self._warning_relict_super_class = True
+
