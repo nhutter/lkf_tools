@@ -29,48 +29,11 @@ from .rgps import *
 
 import pickle
 
-# class Pretty(object):
-#     def __new__(cls, filepath=None, *args, **kwargs):
-#         if filepath:
-#             with open(filepath) as f:
-#                inst = pickle.load(f)
-#             if not isinstance(inst, cls):
-#                raise TypeError('Unpickled object is not of type {}'.format(cls))
-#         else:
-#             inst = super(Pretty, cls).__new__(cls, *args, **kwargs)
-#         return inst
-
 
 class lkf_dataset(object):
     """
     Class to process deformation and drift dataset to LKF data set.
     """
-    def __new__(cls,netcdf_file,output_path='./', is_pickle=False,**kwargs):
-        cls.pickle_path = Path(output_path).joinpath(str(netcdf_file).split('/')[-1].split('.')[0]+'lkf_pickle.pkl')
-        if cls.pickle_path.is_file() and not is_pickle:
-            with open(cls.pickle_path, 'rb') as f:
-                logger.info('Opening existing lkf_dataset from pickle: %s' %cls.pickle_path)
-                inst = pickle.load(f)
-            if not isinstance(inst, cls):
-                raise TypeError('Unpickled object is not of type {}'.format(cls))
-        else:
-            logger.info('Creating new lkf_dataset from input data')
-            inst = super(lkf_dataset, cls).__new__(cls)
-        
-        return inst
-    
-    def __getnewargs__(self):
-        return self.netcdf_file, self.output_path, True
-
-    #    return (lkf_dataset.__repr__(self),)
-
-    #def __repr__(self):
-    #    return '<lkf_dataset %r, %r>' % (self.netcdf_file, self.output_path)
-
-    #def __str__(self):
-    #    return "%s %s" % (self.netcdf_file, self.output_path)
-    
-    
     def __init__(self,netcdf_file,output_path='./',xarray=None,
                  max_kernel=5,min_kernel=1, dog_thres=0.01,skeleton_kernel=0,
                  dis_thres=4,ellp_fac=2,angle_thres=45,eps_thres=1.25,lmin=3,
@@ -80,83 +43,97 @@ class lkf_dataset(object):
 
         netcdf_file: expected variables U,V,A in shape (time,x,y)
         """
-        print('Hello')
         # Set output path
         self.netcdf_file = str(netcdf_file)
         self.output_path = output_path
         self.lkfpath = Path(output_path).joinpath(self.netcdf_file.split('/')[-1].split('.')[0])
         self.pickle_path = Path(output_path).joinpath(str(netcdf_file).split('/')[-1].split('.')[0]+'lkf_pickle.pkl')
-        lkfpath = '/'
-        for lkfpathseg in str(self.lkfpath.absolute()).split('/')[1:]:
-            lkfpath += lkfpathseg + '/'
-            if not os.path.exists(lkfpath):
-                os.mkdir(lkfpath)
-                
-        # Store detection parameters
-        self.max_kernel = max_kernel
-        self.min_kernel = min_kernel
-        self.dog_thres = dog_thres
-        self.skeleton_kernel = skeleton_kernel
-        self.dis_thres = dis_thres
-        self.ellp_fac = ellp_fac
-        self.angle_thres = angle_thres
-        self.eps_thres = eps_thres
-        self.lmin = lmin
-        self.latlon = latlon
-        self.return_eps = return_eps
-        self.red_fac = red_fac
-        self.t_red = t_red
         
-
-        # Read netcdf file
-        if xarray is None:
-            self.data = xr.open_dataset(self.netcdf_file)
-        else:
-            self.data = xarray
-
-        # Store variables
-        self.time = self.data.time
-        self.lon = self.data.ULON
-        self.lat = self.data.ULAT
-
-        self.lon = self.lon.where(self.lon<=1e30); self.lat = self.lat.where(self.lat<=1e30);
-        self.lon = self.lon.where(self.lon<180,other=self.lon-360)
-
-        if hasattr(self.data,'DXU') and hasattr(self.data,'DYV'):
-            self.dxu  = self.data.DXU
-            self.dyu  = self.data.DYV
-        else:
-            print("Warning: DXU and DYU are missing in netcdf file!")
-            print("  -->  Compute dxu and dyu from lon,lat using SSMI projection")
-            m = mSSMI()
-            x,y = m(self.lon,self.lat)
-            self.dxu = np.sqrt((x[:,1:]-x[:,:-1])**2 + (y[:,1:]-y[:,:-1])**2)
-            self.dxu = np.concatenate([self.dxu,self.dxu[:,-1].reshape((self.dxu.shape[0],1))],axis=1)
-            self.dyu = np.sqrt((x[1:,:]-x[:-1,:])**2 + (y[1:,:]-y[:-1,:])**2)
-            self.dyu = np.concatenate([self.dyu,self.dyu[-1,:].reshape((1,self.dyu.shape[1]))],axis=0)
+        self._initialized = False
+        if self.pickle_path.is_file():
+            with open(self.pickle_path, 'rb') as f:
+                logger.info('Opening existing lkf_dataset from pickle: %s' %self.pickle_path)
+                inst = pickle.load(f)
+            if isinstance(inst, lkf_dataset):
+                for k in inst.__dict__.keys():
+                    setattr(self, k, getattr(inst, k))
+                self._initialized = True
+            else:
+                logger.warning('Existing pickle does not fit to lkf_dataset class! %s' %cls.pickle_path)
         
+        if not self._initialized:
+            logger.info('Creating new lkf_dataset from input data')
+            lkfpath = '/'
+            for lkfpathseg in str(self.lkfpath.absolute()).split('/')[1:]:
+                lkfpath += lkfpathseg + '/'
+                if not os.path.exists(lkfpath):
+                    os.mkdir(lkfpath)
 
-        # Generate Arctic Basin mask
-        self.mask = ((((self.lon > -120) & (self.lon < 100)) & (self.lat >= 80)) |
-                ((self.lon <= -120) & (self.lat >= 70)) |
-                ((self.lon >= 100) & (self.lat >= 70)))
-        self.index_x = np.where(np.sum(self.mask[1:-1,1:-1],axis=0)>0)
-        self.index_y = np.where(np.sum(self.mask[1:-1,1:-1],axis=1)>0)
-        
-        
-        # Check for deformation rates in netcdf
-        if not (hasattr(self.data,'div') and hasattr(self.data,'shr') and hasattr(self.data,'vor')):
-            self.data['div'] = self.data['U']*np.nan
-            self.data['shr'] = self.data['U']*np.nan
-            self.data['vor'] = self.data['U']*np.nan
-        
-        # Initialize LKF and tracked LKF fields
-        self.lkfs = np.empty((int(np.ceil(self.data.time.size/self.t_red))),dtype='object')
-        self.timesteps_detected = np.zeros((int(np.ceil(self.data.time.size/self.t_red)))).astype('bool')
-        self.tracked_lkfs = np.empty((int(np.ceil(self.data.time.size/self.t_red))),
-                                     dtype='object')
-        self.data['lkfs'] = self.data['U']*np.nan
-        self.data['tracked_lkfs'] = self.data['U']*np.nan
+            # Store detection parameters
+            self.max_kernel = max_kernel
+            self.min_kernel = min_kernel
+            self.dog_thres = dog_thres
+            self.skeleton_kernel = skeleton_kernel
+            self.dis_thres = dis_thres
+            self.ellp_fac = ellp_fac
+            self.angle_thres = angle_thres
+            self.eps_thres = eps_thres
+            self.lmin = lmin
+            self.latlon = latlon
+            self.return_eps = return_eps
+            self.red_fac = red_fac
+            self.t_red = t_red
+
+
+            # Read netcdf file
+            if xarray is None:
+                self.data = xr.open_dataset(self.netcdf_file)
+            else:
+                self.data = xarray
+
+            # Store variables
+            self.time = self.data.time
+            self.lon = self.data.ULON
+            self.lat = self.data.ULAT
+
+            self.lon = self.lon.where(self.lon<=1e30); self.lat = self.lat.where(self.lat<=1e30);
+            self.lon = self.lon.where(self.lon<180,other=self.lon-360)
+
+            if hasattr(self.data,'DXU') and hasattr(self.data,'DYV'):
+                self.dxu  = self.data.DXU
+                self.dyu  = self.data.DYV
+            else:
+                print("Warning: DXU and DYU are missing in netcdf file!")
+                print("  -->  Compute dxu and dyu from lon,lat using SSMI projection")
+                m = mSSMI()
+                x,y = m(self.lon,self.lat)
+                self.dxu = np.sqrt((x[:,1:]-x[:,:-1])**2 + (y[:,1:]-y[:,:-1])**2)
+                self.dxu = np.concatenate([self.dxu,self.dxu[:,-1].reshape((self.dxu.shape[0],1))],axis=1)
+                self.dyu = np.sqrt((x[1:,:]-x[:-1,:])**2 + (y[1:,:]-y[:-1,:])**2)
+                self.dyu = np.concatenate([self.dyu,self.dyu[-1,:].reshape((1,self.dyu.shape[1]))],axis=0)
+
+
+            # Generate Arctic Basin mask
+            self.mask = ((((self.lon > -120) & (self.lon < 100)) & (self.lat >= 80)) |
+                    ((self.lon <= -120) & (self.lat >= 70)) |
+                    ((self.lon >= 100) & (self.lat >= 70)))
+            self.index_x = np.where(np.sum(self.mask[1:-1,1:-1],axis=0)>0)
+            self.index_y = np.where(np.sum(self.mask[1:-1,1:-1],axis=1)>0)
+
+
+            # Check for deformation rates in netcdf
+            if not (hasattr(self.data,'div') and hasattr(self.data,'shr') and hasattr(self.data,'vor')):
+                self.data['div'] = self.data['U']*np.nan
+                self.data['shr'] = self.data['U']*np.nan
+                self.data['vor'] = self.data['U']*np.nan
+
+            # Initialize LKF and tracked LKF fields
+            self.lkfs = np.empty((int(np.ceil(self.data.time.size/self.t_red))),dtype='object')
+            self.timesteps_detected = np.zeros((int(np.ceil(self.data.time.size/self.t_red)))).astype('bool')
+            self.tracked_lkfs = np.empty((int(np.ceil(self.data.time.size/self.t_red))),
+                                         dtype='object')
+            self.data['lkfs'] = self.data['U']*np.nan
+            self.data['tracked_lkfs'] = self.data['U']*np.nan
 
 
     def save(self):
