@@ -18,6 +18,8 @@ import sys
 from multiprocessing import Pool
 import warnings
 from pathlib import Path
+import pickle
+from loguru import logger
 
 import xarray as xr
 
@@ -25,13 +27,50 @@ from .detection import *
 from .tracking import *
 from .rgps import *
 
+import pickle
 
+# class Pretty(object):
+#     def __new__(cls, filepath=None, *args, **kwargs):
+#         if filepath:
+#             with open(filepath) as f:
+#                inst = pickle.load(f)
+#             if not isinstance(inst, cls):
+#                raise TypeError('Unpickled object is not of type {}'.format(cls))
+#         else:
+#             inst = super(Pretty, cls).__new__(cls, *args, **kwargs)
+#         return inst
 
 
 class lkf_dataset(object):
     """
     Class to process deformation and drift dataset to LKF data set.
     """
+    def __new__(cls,netcdf_file,output_path='./', is_pickle=False,**kwargs):
+        cls.pickle_path = Path(output_path).joinpath(str(netcdf_file).split('/')[-1].split('.')[0]+'lkf_pickle.pkl')
+        if cls.pickle_path.is_file() and not is_pickle:
+            with open(cls.pickle_path, 'rb') as f:
+                logger.info('Opening existing lkf_dataset from pickle: %s' %cls.pickle_path)
+                inst = pickle.load(f)
+            if not isinstance(inst, cls):
+                raise TypeError('Unpickled object is not of type {}'.format(cls))
+        else:
+            logger.info('Creating new lkf_dataset from input data')
+            inst = super(lkf_dataset, cls).__new__(cls)
+        
+        return inst
+    
+    def __getnewargs__(self):
+        return self.netcdf_file, self.output_path, True
+
+    #    return (lkf_dataset.__repr__(self),)
+
+    #def __repr__(self):
+    #    return '<lkf_dataset %r, %r>' % (self.netcdf_file, self.output_path)
+
+    #def __str__(self):
+    #    return "%s %s" % (self.netcdf_file, self.output_path)
+    
+    
     def __init__(self,netcdf_file,output_path='./',xarray=None,
                  max_kernel=5,min_kernel=1, dog_thres=0.01,skeleton_kernel=0,
                  dis_thres=4,ellp_fac=2,angle_thres=45,eps_thres=1.25,lmin=3,
@@ -41,9 +80,12 @@ class lkf_dataset(object):
 
         netcdf_file: expected variables U,V,A in shape (time,x,y)
         """
+        print('Hello')
         # Set output path
         self.netcdf_file = str(netcdf_file)
+        self.output_path = output_path
         self.lkfpath = Path(output_path).joinpath(self.netcdf_file.split('/')[-1].split('.')[0])
+        self.pickle_path = Path(output_path).joinpath(str(netcdf_file).split('/')[-1].split('.')[0]+'lkf_pickle.pkl')
         lkfpath = '/'
         for lkfpathseg in str(self.lkfpath.absolute()).split('/')[1:]:
             lkfpath += lkfpathseg + '/'
@@ -117,6 +159,11 @@ class lkf_dataset(object):
         self.data['tracked_lkfs'] = self.data['U']*np.nan
 
 
+    def save(self):
+        with open(self.pickle_path, 'wb') as output_pkl:
+            logger.info('Writing lkf_data to pickle file: %s' %self.pickle_path)
+            pickle.dump(self, output_pkl, pickle.HIGHEST_PROTOCOL)
+    
     def detect_lkfs(self,indexes=None,force_redetect=False):
         """
         Detects LKFs in data set given in netcdf file
