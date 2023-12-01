@@ -37,7 +37,7 @@ class lkf_dataset(object):
     def __init__(self,netcdf_file,output_path='./',xarray=None,
                  max_kernel=5,min_kernel=1, dog_thres=0.01,skeleton_kernel=0,
                  dis_thres=4,ellp_fac=2,angle_thres=45,eps_thres=1.25,lmin=3,
-                 latlon=True,return_eps=True,red_fac=1,t_red=3):
+                 latlon=True,return_eps=True,use_eps=True,red_fac=1,t_red=3):
         """
         Processes deformation and drift dataset to LKF data set
 
@@ -81,6 +81,7 @@ class lkf_dataset(object):
             self.lmin = lmin
             self.latlon = latlon
             self.return_eps = return_eps
+            self.use_eps = use_eps
             self.red_fac = red_fac
             self.t_red = t_red
 
@@ -218,7 +219,7 @@ class lkf_dataset(object):
                                          dog_thres=self.dog_thres,dis_thres=self.dis_thres*self.corfac,
                                          ellp_fac=self.ellp_fac,angle_thres=self.angle_thres,
                                          eps_thres=self.eps_thres,lmin=self.lmin*self.corfac,
-                                         max_ind=500*self.corfac,use_eps=True,skeleton_kernel=self.skeleton_kernel)
+                                         max_ind=500*self.corfac,use_eps=self.use_eps,skeleton_kernel=self.skeleton_kernel)
 
             # Save the detected features
 
