@@ -168,26 +168,15 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
 
     
             # Ravel indeces to 1D index for faster comparison
-            orth_area_ravel = []
-            for io in range(orth_area.shape[0]):
-                orth_area_ravel.append(np.ravel_multi_index(orth_area[io,:].astype('int'),
-                                                            np.transpose(XGi).shape))
-            search_area_ravel = []
-            for io in range(search_area.shape[0]):
-                search_area_ravel.append(np.ravel_multi_index(search_area[io,:].astype('int'),
-                                                              np.transpose(XGi).shape))
+            grid_shape = np.transpose(XGi).shape
+            orth_area_ravel = np.ravel_multi_index(orth_area.T.astype('int'), grid_shape).tolist()
+            search_area_ravel = np.ravel_multi_index(search_area.T.astype('int'), grid_shape).tolist()
             search_area_ravel = list(set(search_area_ravel).intersection(orth_area_ravel))
-            search_area = np.zeros((len(search_area_ravel),2))
-            for io in range(search_area.shape[0]):
-                search_area[io,:] = np.unravel_index(search_area_ravel[io],np.transpose(XGi).shape)
-        
-    
+
+
             # Loop over all LKFs to check whether there is overlap with search area
             for i in range(lkf1.shape[0]):
-                lkf_ravel = []
-                for io in range(lkf1[i].shape[0]):
-                    lkf_ravel.append(np.ravel_multi_index(lkf1[i][io,:].astype('int'),
-                                                          np.transpose(XGi).shape))
+                lkf_ravel = np.ravel_multi_index(lkf1[i].T.astype('int'), grid_shape).tolist()
 
                 comb_seg_search_area, comb_seg_search_area_count = np.unique(search_area_ravel+lkf_ravel,
                                                                              return_counts=True)
@@ -202,7 +191,7 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
                             # Test again with overlap:
                             A = iseg_d.T
                             B = np.stack(np.unravel_index(comb_seg_search_area[comb_seg_search_area_count>1],
-                                                          np.transpose(XGi).shape))
+                                                          grid_shape))
                             mhdi, overlap_i = compute_MHD_segment(A,B,return_overlap=True,
                                                                   overlap_thres=overlap_thres,
                                                                   angle_thres=angle_thres)
@@ -219,7 +208,7 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
                             # Test again with overlap:
                             A = iseg_d.T
                             B = np.stack(np.unravel_index(comb_seg_orth_area[comb_seg_orth_area_count>1],
-                                                          np.transpose(XGi).shape))
+                                                          grid_shape))
                             mhdi, overlap_i = compute_MHD_segment(A,B,return_overlap=True,
                                                                   overlap_thres=overlap_thres,
                                                                   angle_thres=angle_thres)
