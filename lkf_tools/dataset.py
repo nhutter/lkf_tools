@@ -195,20 +195,24 @@ class lkf_dataset(object):
                     vor = 0.5*(dudy-dvdx) * 3600. *24. # in day^-1
                     self.data.vor[it+itr,1:-1,1:-1] = vor
 
-                eps_tot = np.sqrt(div**2+shr**2)
+                # Convert to numpy immediately to avoid xarray .where() overhead
+                eps_tot = np.array(np.sqrt(div**2+shr**2))
 
-                eps_tot = eps_tot.where((aice[1:-1,1:-1]>0) & (aice[1:-1,1:-1]<=1))
+                # Mask ice concentration and Arctic basin in one numpy pass
+                aice_np = np.array(aice[1:-1,1:-1])
+                valid = ((aice_np > 0) & (aice_np <= 1) &
+                         np.array(self.mask[1:-1,1:-1]).astype(bool))
+                eps_tot[~valid] = np.nan
 
-                # Mask Arctic basin and shrink array
-                eps_tot = eps_tot.where(self.mask[1:-1,1:-1])
+                # Subsample and apply border NaNs
                 eps_tot = eps_tot[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
                                   max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac]
                 eps_tot[0,:] = np.nan; eps_tot[-1,:] = np.nan
                 eps_tot[:,0] = np.nan; eps_tot[:,-1] = np.nan
                 eps_tot[1,:] = np.nan; eps_tot[-2,:] = np.nan
                 eps_tot[:,1] = np.nan; eps_tot[:,-2] = np.nan
-                
-                self.eps_tot_list.append(np.array(eps_tot))
+
+                self.eps_tot_list.append(eps_tot)
     
 
             # Apply detection algorithm
