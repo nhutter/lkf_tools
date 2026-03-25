@@ -223,15 +223,14 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
         x = np.empty(seg_active.shape[:1])*np.nan  
         y = np.empty(seg_active.shape[:1])*np.nan
 
+        nodetect_intm = np.zeros((nodetect.shape[0]+2, nodetect.shape[1]+2))
+        nodetect_intm[1:-1,1:-1] = nodetect.copy()
         for ix in [-1,0,1]:
             for iy in [-1,0,1]:
                 indx = (seg_active[:,0,ind] + ix).astype('int')
                 indy = (seg_active[:,1,ind] + iy).astype('int')
                 mask = np.all([indx>=0,indx<nodetect.shape[0],
                                indy>=0, indy<nodetect.shape[1]], axis=0)
-                nodetect_intm = np.zeros((nodetect.shape[0]+2,
-                                          nodetect.shape[1]+2))
-                nodetect_intm[1:-1,1:-1] = nodetect.copy()
                 x[(nodetect_intm[indx+1,indy+1] == 1) & mask] = ix
                 y[(nodetect_intm[indx+1,indy+1] == 1) & mask] = iy
         
