@@ -145,6 +145,10 @@ def cut_neighbours(img):
 def nansum_neighbours(img):
     return np.nansum(cut_neighbours(img),axis=(2,3))
 
+def sum_neighbours(img):
+    """Like nansum_neighbours but uses np.sum — safe when img contains no NaNs."""
+    return np.sum(cut_neighbours(img),axis=(2,3))
+
 def nanmean_neighbours(img):
     return np.nanmean(cut_neighbours(img),axis=(2,3))
 
@@ -186,7 +190,7 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
     active_detection = np.arange(seg.shape[0])
 
     # Deactivate segments that contain only one or two points
-    deactivate_segs = np.where(nansum_neighbours(nodetect_intm)[seg[:,0].astype('int'),
+    deactivate_segs = np.where(sum_neighbours(nodetect_intm)[seg[:,0].astype('int'),
                                                                 seg[:,1].astype('int')].squeeze() != 1)
     if deactivate_segs[0].size > 0:
         active_detection = np.delete(active_detection,
@@ -259,7 +263,7 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
         nodetect_intm[1:-1,1:-1] = nodetect.copy()
     
         # Deactivate pixels with more than one neighbour and activate neighbours
-        num_neighbours = nansum_neighbours(nodetect_intm)
+        num_neighbours = sum_neighbours(nodetect_intm)
 
         deactivate_segs_muln = np.where(np.atleast_1d(num_neighbours[seg_append[:,0][mask].astype('int'),
                                                   seg_append[:,1][mask].astype('int')].squeeze()) > 1)[0]
@@ -437,8 +441,8 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
             break
         if active_detection.size == 0:
             fac_starts = 100
-            new_starts = np.append(np.rollaxis(np.array(np.where((nansum_neighbours(nodetect_intm)==3) & (nodetect==1))),1)[::fac_starts,:],
-                                   np.rollaxis(np.array(np.where((nansum_neighbours(nodetect_intm)==3) & (nodetect==1))),1)[1::fac_starts,:],axis=0)
+            new_starts = np.append(np.rollaxis(np.array(np.where((sum_neighbours(nodetect_intm)==3) & (nodetect==1))),1)[::fac_starts,:],
+                                   np.rollaxis(np.array(np.where((sum_neighbours(nodetect_intm)==3) & (nodetect==1))),1)[1::fac_starts,:],axis=0)
             
             # Mark new starts as detected
             if new_starts.size>0:
@@ -446,7 +450,7 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
             nodetect_intm[1:-1,1:-1] = nodetect.copy()
 
             # Add new generated end points as well
-            new_starts = np.append(new_starts,np.rollaxis(np.array(np.where((nansum_neighbours(nodetect_intm)<=2) & (nodetect==1))),1),axis=0)
+            new_starts = np.append(new_starts,np.rollaxis(np.array(np.where((sum_neighbours(nodetect_intm)<=2) & (nodetect==1))),1),axis=0)
 
             # Mark new starts as detected
             if new_starts.size>0:
