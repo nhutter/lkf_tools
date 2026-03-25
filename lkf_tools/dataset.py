@@ -249,10 +249,12 @@ class lkf_dataset(object):
             self.lkfs[it+itr] = lkf
             self.timesteps_detected[it] = True
             
-            # Store lkf in xarray
+            # Store lkf in xarray (bulk write via underlying numpy array)
+            lkfs_np = self.data.lkfs.values
             for inum, ilkf in enumerate(lkf):
-                for ix,iy in zip(ilkf[1,:].astype('int'),ilkf[0,:].astype('int')):
-                    self.data.lkfs[it+itr,iy+self.index_y[0][0],ix+self.index_x[0][0]] = inum
+                rows = ilkf[0, :].astype('int') + self.index_y[0][0]
+                cols = ilkf[1, :].astype('int') + self.index_x[0][0]
+                lkfs_np[it+itr, rows, cols] = inum
             
             
             
