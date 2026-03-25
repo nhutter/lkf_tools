@@ -387,3 +387,234 @@ class lkf_dataset(object):
         self.orientation  = None
         self.lifetime     = None
         self.growthrate   = None
+
+
+# ---------------------------------------------------------------------------
+# Stat helper classes (new flat-dataset API; also support legacy nested API)
+# ---------------------------------------------------------------------------
+
+class lkf_lengths:
+    """Compute the arc-length of each detected LKF segment.
+
+    Supports both the legacy nested ``stats.lkf_dataset`` (detected via
+    ``hasattr(lkf, 'lkf_dataset')``) and the new flat ``dataset.lkf_dataset``
+    whose ``lkfs[t]`` is a list of ``(N_cols, N_points)`` arrays.
+
+    Parameters
+    ----------
+    lkf : lkf_dataset
+        Dataset instance with projected coordinates.  ``lkf.indm0`` and
+        ``lkf.indm1`` must point to the x and y coordinate rows/columns.
+
+    Attributes
+    ----------
+    lkf_length : np.ndarray of object
+        1-D object array, one element per timestep slot.  Each element is a
+        1-D float array of per-segment lengths in metres.  Slots without
+        detected LKFs contain an empty array.
+    """
+
+    def __init__(self, lkf):
+        if hasattr(lkf, 'lkf_dataset'):
+            # Legacy nested year/day structure: segments are (N_points, N_cols)
+            lkf_length = []
+            for lkf_year in lkf.lkf_dataset:
+                len_year = []
+                for lkf_day in lkf_year:
+                    len_day = []
+                    for ilkf in lkf_day:
+                        len_day.append(np.sum(np.sqrt(np.diff(ilkf[:, lkf.indm0])**2 +
+                                                      np.diff(ilkf[:, lkf.indm1])**2)))
+                    len_year.append(np.array(len_day)[np.isfinite(len_day)])
+                lkf_length.append(len_year)
+            self.lkf_length = np.array(lkf_length)
+        else:
+            # New flat structure: lkf.lkfs[t] is a list of (N_cols, N_points) arrays
+            lkf_length = []
+            for t in range(len(lkf.lkfs)):
+                if lkf.lkfs[t] is None:
+                    lkf_length.append(np.array([]))
+                    continue
+                len_t = [np.sum(np.sqrt(np.diff(seg[lkf.indm0, :])**2 +
+                                        np.diff(seg[lkf.indm1, :])**2))
+                         for seg in lkf.lkfs[t]]
+                lkf_length.append(np.array(len_t))
+            self.lkf_length = np.array(lkf_length, dtype=object)
+
+
+class lkf_density:
+    """Compute the spatial density of LKF points on a regular projected grid.
+
+    Bins all projected (x, y) points from each timestep into a 2-D histogram.
+    Supports both the legacy nested ``stats.lkf_dataset`` and the new flat
+    ``dataset.lkf_dataset``.
+
+    Parameters
+    ----------
+    lkf : lkf_dataset
+        Dataset instance with projected coordinates.  ``lkf.indm0`` and
+        ``lkf.indm1`` must point to the x and y coordinate rows/columns.
+    res : float, optional
+        Grid cell size in metres.  Default is 50 km.
+
+    Attributes
+    ----------
+    lkf_density : np.ndarray, shape ``(n_timesteps, nx, ny)``
+        Raw point counts per grid cell per timestep.
+    x, y : np.ndarray
+        2-D arrays of grid cell-centre coordinates (metres).
+    xedg, yedg : np.ndarray
+        1-D grid edge arrays (metres).
+    res : float
+        Grid resolution in metres.
+    """
+
+    def __init__(self, lkf, res=50e3):
+        self.res = res
+
+        if hasattr(lkf, 'lkf_dataset'):
+            # Legacy: projection object has xmin/xmax/ymin/ymax
+            xedg = np.arange(lkf.m.xmin, lkf.m.xmax, res)
+            yedg = np.arange(lkf.m.ymin, lkf.m.ymax, res)
+            y, x = np.meshgrid(yedg[1:], xedg[1:])
+            self.x, self.y, self.xedg, self.yedg = x, y, xedg, yedg
+
+            density = np.zeros((len(lkf.lkf_dataset), xedg.size - 1, yedg.size - 1))
+            for iyear in range(len(lkf.lkf_dataset)):
+                pts = np.concatenate([np.concatenate(lkfday)
+                                      for lkfday in lkf.lkf_dataset[iyear]
+                                      if len(lkfday) > 0])
+                H, _, _ = np.histogram2d(pts[:, lkf.indm0], pts[:, lkf.indm1],
+                                         bins=(xedg, yedg))
+                density[iyear] = H
+            self.lkf_density = density
+        else:
+            # New flat structure: determine grid extent from data
+            xs, ys = [], []
+            for t in range(len(lkf.lkfs)):
+                if lkf.lkfs[t] is None:
+                    continue
+                for seg in lkf.lkfs[t]:
+                    xs.append(seg[lkf.indm0, :])
+                    ys.append(seg[lkf.indm1, :])
+            all_x = np.concatenate(xs)
+            all_y = np.concatenate(ys)
+
+            xedg = np.arange(np.floor(all_x.min() / res) * res,
+                             np.ceil(all_x.max() / res) * res + res, res)
+            yedg = np.arange(np.floor(all_y.min() / res) * res,
+                             np.ceil(all_y.max() / res) * res + res, res)
+            y, x = np.meshgrid(yedg[1:], xedg[1:])
+            self.x, self.y, self.xedg, self.yedg = x, y, xedg, yedg
+
+            n_t = len(lkf.lkfs)
+            density = np.zeros((n_t, xedg.size - 1, yedg.size - 1))
+            for t in range(n_t):
+                if lkf.lkfs[t] is None:
+                    continue
+                pts = np.concatenate([seg[[lkf.indm0, lkf.indm1], :]
+                                      for seg in lkf.lkfs[t]], axis=1)
+                H, _, _ = np.histogram2d(pts[0], pts[1], bins=(xedg, yedg))
+                density[t] = H
+            self.lkf_density = density
+
+
+class lkf_curvature:
+    """Compute the end-to-end straight-line distance of each LKF segment.
+
+    This is sometimes called the *chord length* or *end-to-end distance*.
+    Comparing it to the arc-length (from :class:`lkf_lengths`) gives a
+    straightness (sinuosity) measure: a ratio close to 1 means a nearly
+    straight feature; a ratio close to 0 means a highly curved one.
+
+    Supports both the legacy nested ``stats.lkf_dataset`` and the new flat
+    ``dataset.lkf_dataset``.
+
+    Parameters
+    ----------
+    lkf : lkf_dataset
+        Dataset instance with projected coordinates (``indm0``, ``indm1``).
+
+    Attributes
+    ----------
+    lkf_curvature : np.ndarray of object
+        1-D object array, one element per timestep slot.  Each element is a
+        list of per-segment end-to-end distances in metres.
+    """
+
+    def __init__(self, lkf):
+        if hasattr(lkf, 'lkf_dataset'):
+            # Legacy: segments are (N_points, N_cols), first/last row = first/last point
+            lkf_curvature = []
+            for lkf_year in lkf.lkf_dataset:
+                curv_year = []
+                for lkf_day in lkf_year:
+                    curv_day = []
+                    for ilkf in lkf_day:
+                        curv_day.append(np.sqrt(
+                            (ilkf[0, lkf.indm0] - ilkf[-1, lkf.indm0])**2 +
+                            (ilkf[0, lkf.indm1] - ilkf[-1, lkf.indm1])**2))
+                    curv_year.append(curv_day)
+                lkf_curvature.append(curv_year)
+            self.lkf_curvature = lkf_curvature
+        else:
+            # New flat structure: segments are (N_cols, N_points)
+            lkf_curvature = []
+            for t in range(len(lkf.lkfs)):
+                if lkf.lkfs[t] is None:
+                    lkf_curvature.append([])
+                    continue
+                curv_t = [np.sqrt((seg[lkf.indm0, 0] - seg[lkf.indm0, -1])**2 +
+                                  (seg[lkf.indm1, 0] - seg[lkf.indm1, -1])**2)
+                          for seg in lkf.lkfs[t]]
+                lkf_curvature.append(curv_t)
+            self.lkf_curvature = np.array(lkf_curvature, dtype=object)
+
+
+class lkf_deformation:
+    """Compute mean divergence and shear rates along each LKF segment.
+
+    For each segment, the mean of the per-point divergence and shear values
+    is returned as a ``[mean_div, mean_shr]`` pair.
+
+    Supports both the legacy nested ``stats.lkf_dataset`` and the new flat
+    ``dataset.lkf_dataset``.
+
+    Parameters
+    ----------
+    lkf : lkf_dataset
+        Dataset instance.  ``lkf.indd0`` must point to the divergence column
+        and ``lkf.indd1`` to the shear column.
+
+    Attributes
+    ----------
+    lkf_deformation : np.ndarray of object
+        1-D object array, one element per timestep slot.  Each element is a
+        list of ``[mean_div, mean_shr]`` pairs (one per segment) in day⁻¹.
+    """
+
+    def __init__(self, lkf):
+        if hasattr(lkf, 'lkf_dataset'):
+            # Legacy: segments are (N_points, N_cols)
+            lkf_deformation = []
+            for lkf_year in lkf.lkf_dataset:
+                defo_year = []
+                for lkf_day in lkf_year:
+                    defo_day = []
+                    for ilkf in lkf_day:
+                        defo_day.append([np.mean(ilkf[:, lkf.indd0]),
+                                         np.mean(ilkf[:, lkf.indd1])])
+                    defo_year.append(defo_day)
+                lkf_deformation.append(defo_year)
+            self.lkf_deformation = np.array(lkf_deformation)
+        else:
+            # New flat structure: segments are (N_cols, N_points)
+            lkf_deformation = []
+            for t in range(len(lkf.lkfs)):
+                if lkf.lkfs[t] is None:
+                    lkf_deformation.append([])
+                    continue
+                defo_t = [[np.mean(seg[lkf.indd0, :]), np.mean(seg[lkf.indd1, :])]
+                          for seg in lkf.lkfs[t]]
+                lkf_deformation.append(defo_t)
+            self.lkf_deformation = np.array(lkf_deformation, dtype=object)

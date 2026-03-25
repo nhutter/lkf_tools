@@ -85,6 +85,12 @@ class lkf_dataset(object):
             self.red_fac = red_fac
             self.t_red = t_red
 
+            # Fixed column indices for segment arrays (N_cols, N_points)
+            # Layout: [row, col, lon, lat, div, shr, vor, x, y]
+            self.indd0 = 4   # divergence
+            self.indd1 = 5   # shear
+            self.indd2 = 6   # vorticity
+
 
             # Read netcdf file
             if xarray is None:
@@ -245,6 +251,18 @@ class lkf_dataset(object):
                                 np.array(vor[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
                                        max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac]))
 
+            if self.latlon:
+                if not hasattr(self, 'proj'):
+                    from pyproj import Proj as _Proj
+                    self.proj = _Proj(proj='stere', lat_0=90, lat_ts=75, lon_0=-45, ellps='WGS84')
+                    self.indm0 = 7
+                    self.indm1 = 8
+                proj_segs = []
+                for seg in lkf:
+                    x, y = self.proj(seg[2, :], seg[3, :])
+                    proj_segs.append(np.concatenate([seg, np.stack([x, y])], axis=0))
+                lkf = proj_segs
+
             lkf_T = np.empty(len(lkf), dtype=object)
             lkf_T[:] = [j.T for j in lkf]
             np.save(self.lkfpath.joinpath('lkf_%s_%03i.npy' %(self.netcdf_file.split('/')[-1].split('.')[0],(it+1))), lkf_T)
@@ -263,6 +281,122 @@ class lkf_dataset(object):
             
             
             
+    def compute_projected_coords(self, proj=None):
+        """Append projected (x, y) coordinates to every LKF segment.
+
+        Reads lon (row 2) and lat (row 3) from each segment, projects them to
+        Cartesian metres using *proj*, and appends x and y as two new rows
+        (indices 7 and 8).  The method is idempotent: calling it a second time
+        with the same projection leaves the arrays unchanged.
+
+        Parameters
+        ----------
+        proj : pyproj.Proj, optional
+            Projection to use.  Defaults to a polar-stereographic projection
+            centred on the North Pole (lat_ts=75, lon_0=-45, WGS84) — the same
+            projection used by the legacy ``stats.py`` reader.
+
+        Sets
+        ----
+        self.proj   : the Proj instance used
+        self.indm0  : 7  (column index of x in the (N_cols, N_points) array)
+        self.indm1  : 8  (column index of y)
+        """
+        from pyproj import Proj as _Proj
+        if proj is None:
+            proj = _Proj(proj='stere', lat_0=90, lat_ts=75, lon_0=-45, ellps='WGS84')
+        self.proj  = proj
+        self.indm0 = 7
+        self.indm1 = 8
+
+        for t in range(len(self.lkfs)):
+            if self.lkfs[t] is None:
+                continue
+            new_segs = []
+            for seg in self.lkfs[t]:
+                # seg shape: (N_cols, N_points); row 2=lon, row 3=lat
+                if seg.shape[0] == 9:
+                    # Already projected — re-project with current proj
+                    seg = seg[:7, :]
+                x, y = proj(seg[2, :], seg[3, :])
+                new_segs.append(np.concatenate([seg, np.stack([x, y])], axis=0))
+            self.lkfs[t] = new_segs
+
+    def compute_lengths(self):
+        """Compute arc-length of every LKF segment and cache on ``self.lengths``.
+
+        Calls :meth:`compute_projected_coords` automatically if projected
+        coordinates have not yet been appended.
+
+        Returns
+        -------
+        lkf_lengths
+            The :class:`lkf_tools.stats.lkf_lengths` instance (also stored as
+            ``self.lengths``).
+        """
+        if not hasattr(self, 'indm0'):
+            self.compute_projected_coords()
+        from lkf_tools.stats import lkf_lengths
+        self.lengths = lkf_lengths(self)
+        return self.lengths
+
+    def compute_density(self, grid_res=50e3):
+        """Bin LKF points into a 2-D spatial density grid and cache on ``self.density``.
+
+        Calls :meth:`compute_projected_coords` automatically if projected
+        coordinates have not yet been appended.
+
+        Parameters
+        ----------
+        grid_res : float, optional
+            Grid cell size in metres.  Default is 50 km.
+
+        Returns
+        -------
+        lkf_density
+            The :class:`lkf_tools.stats.lkf_density` instance (also stored as
+            ``self.density``).
+        """
+        if not hasattr(self, 'indm0'):
+            self.compute_projected_coords()
+        from lkf_tools.stats import lkf_density
+        self.density = lkf_density(self, res=grid_res)
+        return self.density
+
+    def compute_curvature(self):
+        """Compute end-to-end distance of every LKF segment and cache on ``self.curvature``.
+
+        Calls :meth:`compute_projected_coords` automatically if needed.
+
+        Returns
+        -------
+        lkf_curvature
+            The :class:`lkf_tools.stats.lkf_curvature` instance (also stored
+            as ``self.curvature``).
+        """
+        if not hasattr(self, 'indm0'):
+            self.compute_projected_coords()
+        from lkf_tools.stats import lkf_curvature
+        self.curvature = lkf_curvature(self)
+        return self.curvature
+
+    def compute_deformation(self):
+        """Compute mean divergence and shear per segment and cache on ``self.deformation``.
+
+        Calls :meth:`compute_projected_coords` automatically if needed.
+
+        Returns
+        -------
+        lkf_deformation
+            The :class:`lkf_tools.stats.lkf_deformation` instance (also stored
+            as ``self.deformation``).
+        """
+        if not hasattr(self, 'indm0'):
+            self.compute_projected_coords()
+        from lkf_tools.stats import lkf_deformation
+        self.deformation = lkf_deformation(self)
+        return self.deformation
+
     def track_lkfs(self,indexes=None, force_recompute=False):
         """Function that generates tracking data set
         :param indexes: time indexes that should be tracked. If None all time steps are tracked.
