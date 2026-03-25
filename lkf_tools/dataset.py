@@ -123,7 +123,10 @@ class lkf_dataset(object):
 
 
             # Check for deformation rates in netcdf
-            if not (hasattr(self.data,'div') and hasattr(self.data,'shr') and hasattr(self.data,'vor')):
+            self._has_deformation_rates = (hasattr(self.data,'div') and
+                                           hasattr(self.data,'shr') and
+                                           hasattr(self.data,'vor'))
+            if not self._has_deformation_rates:
                 self.data['div'] = self.data['U']*np.nan
                 self.data['shr'] = self.data['U']*np.nan
                 self.data['vor'] = self.data['U']*np.nan
@@ -175,7 +178,7 @@ class lkf_dataset(object):
                 aice = self.data.A[it+itr,:,:]
         
                 # Check if deformation rates are given
-                if hasattr(self.data,'div') and hasattr(self.data,'shr') and hasattr(self.data,'vor'):
+                if self._has_deformation_rates:
                     div = self.data.div[it+itr,:,:]
                     shr = self.data.shr[it+itr,:,:]
                     vor = self.data.vor[it+itr,:,:]
@@ -186,11 +189,11 @@ class lkf_dataset(object):
                     dvdy = ((vice[:,2:]-vice[:,:-2])/(self.dyu[:,:-2]+self.dyu[:,1:-1]))[1:-1,:]
 
                     div = (dudx + dvdy) * 3600. *24. # in day^-1
-                    self.data.div[it+itr,:,:] = div
+                    self.data.div[it+itr,1:-1,1:-1] = div
                     shr = np.sqrt((dudx-dvdy)**2 + (dudy + dvdx)**2) * 3600. *24. # in day^-1
-                    self.data.shr[it+itr,:,:] = shr
+                    self.data.shr[it+itr,1:-1,1:-1] = shr
                     vor = 0.5*(dudy-dvdx) * 3600. *24. # in day^-1
-                    self.data.vor[it+itr,:,:] = vor
+                    self.data.vor[it+itr,1:-1,1:-1] = vor
 
                 eps_tot = np.sqrt(div**2+shr**2)
 
@@ -238,7 +241,8 @@ class lkf_dataset(object):
                                 np.array(vor[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
                                        max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac]))
 
-            lkf_T = [j.T for j in lkf]
+            lkf_T = np.empty(len(lkf), dtype=object)
+            lkf_T[:] = [j.T for j in lkf]
             np.save(self.lkfpath.joinpath('lkf_%s_%03i.npy' %(self.netcdf_file.split('/')[-1].split('.')[0],(it+1))), lkf_T)
             
             # Store lkf in object

@@ -143,7 +143,7 @@ def dir_filt(field,kernelsize=7):
     #return np.stack([signal.convolve2d(field, kernels[i], boundary='symm', mode='same') for i in range(len(kernels))])[inds,:,:]
     inds = np.argmin([np.std(sliced_field[:,:,kernels[i]>0],axis=-1) for i in range(len(kernels))],axis=0)
     filt_all = np.stack([np.sum(sliced_field*kernels[i],axis=(-1,-2)) for i in range(len(kernels))])
-    filt = np.zeros(inds.shape)*np.NaN
+    filt = np.zeros(inds.shape)*np.nan
     for i in range(len(kernels)):
         filt[inds==i] = filt_all[i,inds==i]
     return filt

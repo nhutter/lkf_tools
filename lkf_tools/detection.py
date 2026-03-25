@@ -216,8 +216,8 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
         #   7 | 6 | 5      x 
         #
     
-        x = np.empty(seg_active.shape[:1])*np.NaN  
-        y = np.empty(seg_active.shape[:1])*np.NaN
+        x = np.empty(seg_active.shape[:1])*np.nan  
+        y = np.empty(seg_active.shape[:1])*np.nan
 
         for ix in [-1,0,1]:
             for iy in [-1,0,1]:
@@ -261,8 +261,8 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
         # Deactivate pixels with more than one neighbour and activate neighbours
         num_neighbours = nansum_neighbours(nodetect_intm)
 
-        deactivate_segs_muln = np.where(num_neighbours[seg_append[:,0][mask].astype('int'),
-                                                  seg_append[:,1][mask].astype('int')].squeeze() > 1)[0]
+        deactivate_segs_muln = np.where(np.atleast_1d(num_neighbours[seg_append[:,0][mask].astype('int'),
+                                                  seg_append[:,1][mask].astype('int')].squeeze()) > 1)[0]
         deactivate_segs_muln = np.arange(seg_append.shape[0])[mask][deactivate_segs_muln]
         
         if (deactivate_segs_muln.size > 0):
@@ -315,7 +315,7 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
         # Remove sharp turns from seg_append (here because search for new starting points
         # needs to run beforehand)
         if seg.shape[-1]>1:
-            seg_append[np.sum(np.abs(dx),axis=1)>1,:] = np.NaN # Remove from appending list
+            seg_append[np.sum(np.abs(dx),axis=1)>1,:] = np.nan # Remove from appending list
 
 
 
@@ -405,12 +405,12 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
         # Append new positions of this detection step
         num_new_starts = new_starts.shape[0]
         # Initialize list of new segment elements
-        seg_append_time = np.empty((seg.shape[0],2))*np.NaN
+        seg_append_time = np.empty((seg.shape[0],2))*np.nan
         seg_append_time[active_detection] = seg_append
         seg_append_time = np.append(seg_append_time,new_starts,axis=0)
         seg_old_shape = seg.shape[0]
         # Fill up seg with NaNs for new starts
-        seg = np.append(seg,np.empty((num_new_starts,2,seg.shape[-1]))*np.NaN,axis=0)
+        seg = np.append(seg,np.empty((num_new_starts,2,seg.shape[-1]))*np.nan,axis=0)
         # Append seg with new detected pixels
         seg = np.append(seg,seg_append_time.reshape(seg_append_time.shape[0],2,1),axis=-1)
 
@@ -466,7 +466,7 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
             num_new_starts = new_starts.shape[0]
             seg_old_shape = seg.shape[0]
             # Fill up seg with NaNs for new starts
-            seg = np.append(seg,np.empty((num_new_starts,2,seg.shape[-1]))*np.NaN,axis=0)
+            seg = np.append(seg,np.empty((num_new_starts,2,seg.shape[-1]))*np.nan,axis=0)
             # Fill in new start values 
             seg[seg_old_shape:,:,-1] = new_starts
 
@@ -540,7 +540,7 @@ def elliptical_distance(seg_I,seg_II,ellp_fac=1,dis_thres=np.inf):
 
         dis = 0.5*(d1+d2)
     else:
-        dis = np.NaN
+        dis = np.nan
 
     return dis
 
@@ -597,8 +597,8 @@ def find_pos_connect(seg_I,segs,dis_thres):
     # # Filter for larger displacements than dis_thres
     # mask = np.all([np.all(np.any(np.abs(disp_start)>dis_thres,axis=1),axis=1),
     #                np.all(np.any(np.abs(disp_end  )>dis_thres,axis=1),axis=1)],axis=0)
-    # disp_start[mask,:,:] = np.NaN
-    # disp_end[mask,:,:]   = np.NaN
+    # disp_start[mask,:,:] = np.nan
+    # disp_end[mask,:,:]   = np.nan
 
     # Compute distance only for filtered displacements
     dis = np.hstack([np.sqrt(np.sum(disp_start**2,axis=1)).reshape((segs.shape[0],1,2)),
@@ -1014,8 +1014,8 @@ def lkf_detect_rgps(filename_rgps,max_kernel=5,min_kernel=1,dog_thres=0,dis_thre
 
     Output: seg - list of detected LKFs"""
 
-    (div,xg0,xg1,yg0,yg1,nxcell,nycell) = read_RGPS(filename_rgps + ".DIV", land_fill=np.NaN, nodata_fill=np.NaN)
-    (shr,xg0,xg1,yg0,yg1,nxcell,nycell) = read_RGPS(filename_rgps + ".SHR", land_fill=np.NaN, nodata_fill=np.NaN)
+    (div,xg0,xg1,yg0,yg1,nxcell,nycell) = read_RGPS(filename_rgps + ".DIV", land_fill=np.nan, nodata_fill=np.nan)
+    (shr,xg0,xg1,yg0,yg1,nxcell,nycell) = read_RGPS(filename_rgps + ".SHR", land_fill=np.nan, nodata_fill=np.nan)
 
     # Process deformation data
     eps_tot = np.sqrt(div**2+shr**2)
@@ -1051,14 +1051,14 @@ def lkf_detect_eps(eps_tot,max_kernel=5,min_kernel=1,dog_thres=0,dis_thres=4,ell
 
     ## Take natural logarithm
     proc_eps = np.log(eps_tot)
-    proc_eps[~np.isfinite(proc_eps)] = np.NaN
+    proc_eps[~np.isfinite(proc_eps)] = np.nan
     ## Apply histogram equalization
     proc_eps = hist_eq(proc_eps)
     ## Apply DoG filter
     lkf_detect = DoG_leads(proc_eps,max_kernel,min_kernel)
     ### Filter for DoG>0
     lkf_detect = (lkf_detect > dog_thres).astype('float')
-    lkf_detect[~np.isfinite(proc_eps)] = np.NaN
+    lkf_detect[~np.isfinite(proc_eps)] = np.nan
     ## Apply morphological thinning
     if skeleton_kernel==0:
         lkf_thin =  skimage.morphology.skeletonize(lkf_detect).astype('float')
@@ -1132,7 +1132,7 @@ def lkf_detect_eps_multday(eps_tot,max_kernel=5,min_kernel=1,
         else:
             ## Take natural logarithm
             proc_eps = np.log(eps_tot[i])
-        proc_eps[~np.isfinite(proc_eps)] = np.NaN
+        proc_eps[~np.isfinite(proc_eps)] = np.nan
         if not use_eps:
             ## Apply histogram equalization
             proc_eps = hist_eq(proc_eps)
@@ -1140,7 +1140,7 @@ def lkf_detect_eps_multday(eps_tot,max_kernel=5,min_kernel=1,
         lkf_detect = DoG_leads(proc_eps,max_kernel,min_kernel)
         ### Filter for DoG>0
         lkf_detect = (lkf_detect > dog_thres).astype('float')
-        lkf_detect[~np.isfinite(proc_eps)] = np.NaN
+        lkf_detect[~np.isfinite(proc_eps)] = np.nan
         lkf_detect_multday += lkf_detect
 
     lkf_detect = (lkf_detect_multday > 0)
