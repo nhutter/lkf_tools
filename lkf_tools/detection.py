@@ -441,8 +441,8 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
             break
         if active_detection.size == 0:
             fac_starts = 100
-            new_starts = np.append(np.rollaxis(np.array(np.where((sum_neighbours(nodetect_intm)==3) & (nodetect==1))),1)[::fac_starts,:],
-                                   np.rollaxis(np.array(np.where((sum_neighbours(nodetect_intm)==3) & (nodetect==1))),1)[1::fac_starts,:],axis=0)
+            _nn3 = np.rollaxis(np.array(np.where((sum_neighbours(nodetect_intm)==3) & (nodetect==1))),1)
+            new_starts = np.append(_nn3[::fac_starts,:], _nn3[1::fac_starts,:], axis=0)
             
             # Mark new starts as detected
             if new_starts.size>0:
