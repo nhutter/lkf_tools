@@ -122,8 +122,7 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
                                               search_area+np.concatenate([-np.ones(n_rows).reshape((n_rows,1)),
                                                                           -np.ones(n_rows).reshape((n_rows,1))],axis=1)],axis=0)
     
-            search_area = np.unique(search_area, axis=0)
-
+            # Deduplication is deferred to the set() at ravel time — only clip bounds here
             search_area = search_area[np.all(search_area>=0,axis=1),:]
             search_area = search_area[np.all([search_area[:,0]<nx,search_area[:,1]<ny],axis=0),:]
 
