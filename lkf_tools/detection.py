@@ -145,9 +145,17 @@ def cut_neighbours(img):
 def nansum_neighbours(img):
     return np.nansum(cut_neighbours(img),axis=(2,3))
 
+_ONES33 = np.ones((3, 3))
+
 def sum_neighbours(img):
-    """Like nansum_neighbours but uses np.sum — safe when img contains no NaNs."""
-    return np.sum(cut_neighbours(img),axis=(2,3))
+    """Like nansum_neighbours but uses scipy 2D convolution — safe when img contains no NaNs.
+
+    Avoids materialising the (M, N, 3, 3) stride-tricks view by running a
+    direct 2D convolution with a 3×3 all-ones kernel instead.
+    img must be zero-padded by 1 on each side (shape (M+2, N+2)); the result
+    has shape (M, N).
+    """
+    return ndim.convolve(img, _ONES33, mode='constant', cval=0)[1:-1, 1:-1]
 
 def nanmean_neighbours(img):
     return np.nanmean(cut_neighbours(img),axis=(2,3))
