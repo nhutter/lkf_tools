@@ -174,24 +174,27 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
             search_area_ravel = list(set(search_area_ravel).intersection(orth_area_ravel))
 
 
+            search_area_set = set(search_area_ravel)
+            orth_area_set   = set(orth_area_ravel)
+
             # Loop over all LKFs to check whether there is overlap with search area
             for i in range(lkf1.shape[0]):
                 lkf_ravel = np.ravel_multi_index(lkf1[i].T.astype('int'), grid_shape).tolist()
+                lkf_set = set(lkf_ravel)
 
-                comb_seg_search_area, comb_seg_search_area_count = np.unique(search_area_ravel+lkf_ravel,
-                                                                             return_counts=True)
+                # Fast overlap check via set intersection (avoids np.unique on non-overlapping pairs)
+                overlap_search = search_area_set & lkf_set
 
                 # Check for overlap
-                if np.any(comb_seg_search_area_count > 1):
+                if overlap_search:
                     # LKF1[i] is overlapping with search area
-                    num_points_overlap = np.sum(comb_seg_search_area_count>1)
+                    num_points_overlap = len(overlap_search)
 
                     if first_overlap:
                         if (num_points_overlap >= min_overlap):
                             # Test again with overlap:
                             A = iseg_d.T
-                            B = np.stack(np.unravel_index(comb_seg_search_area[comb_seg_search_area_count>1],
-                                                          grid_shape))
+                            B = np.stack(np.unravel_index(sorted(overlap_search), grid_shape))
                             mhdi, overlap_i = compute_MHD_segment(A,B,return_overlap=True,
                                                                   overlap_thres=overlap_thres,
                                                                   angle_thres=angle_thres)
@@ -199,16 +202,14 @@ def track_lkf(lkf0_d, lkf1, nx, ny, thres_frac=0.75, min_overlap=4,first_overlap
                                 lkf_track_pairs.append(np.array([ilkf,i]))
                     else:
                         # Check in orthogonal area of LKF
-                        comb_seg_orth_area, comb_seg_orth_area_count = np.unique(orth_area_ravel+lkf_ravel,
-                                                                                 return_counts=True)
-                        num_points_overlap_orth = np.sum(comb_seg_orth_area_count>1)
+                        overlap_orth = orth_area_set & lkf_set
+                        num_points_overlap_orth = len(overlap_orth)
                         frac_search_to_orth = num_points_overlap/float(num_points_overlap_orth)
 
                         if (frac_search_to_orth > thres_frac) & (num_points_overlap >= min_overlap):
                             # Test again with overlap:
                             A = iseg_d.T
-                            B = np.stack(np.unravel_index(comb_seg_orth_area[comb_seg_orth_area_count>1],
-                                                          grid_shape))
+                            B = np.stack(np.unravel_index(sorted(overlap_orth), grid_shape))
                             mhdi, overlap_i = compute_MHD_segment(A,B,return_overlap=True,
                                                                   overlap_thres=overlap_thres,
                                                                   angle_thres=angle_thres)
