@@ -1036,19 +1036,37 @@ class lkf_intersection:
         """Return (angle, vor_mean) of *seg* at the point nearest to *intcp*.
 
         *vor_mean* is ``None`` when *indd2* is ``None``.
+
+        The local orientation is estimated by a degree-1 linear fit of the
+        projected (x, y) coordinates against the point index t.  Instead of
+        calling ``np.polyfit`` (which builds a Vandermonde matrix and runs
+        lstsq/QR), the degree-1 slope is computed directly as the ratio of
+        dot products:  slope = dot(t−t̄, z) / dot(t−t̄, t−t̄).  This is
+        numerically equivalent to polyfit but avoids the O(n²) matrix
+        allocation and SVD for small windows.
         """
         idx = int(np.argmin(np.sqrt((seg_rows - intcp[0])**2 + (seg_cols - intcp[1])**2)))
         if is_legacy:
             n = seg_xy.shape[0]
             sl = slice(max(0, idx - num_p), min(n, idx + num_p + 1))
-            px, py = lkf_poly_fit_p(seg_xy[sl, indm0], seg_xy[sl, indm1], 1)
+            x_sl = seg_xy[sl, indm0].astype(float)
+            y_sl = seg_xy[sl, indm1].astype(float)
             vor_mean = float(np.mean(seg_xy[sl, indd2])) if indd2 is not None else None
         else:
             n = seg_xy.shape[1]
             sl = slice(max(0, idx - num_p), min(n, idx + num_p + 1))
-            px, py = lkf_poly_fit_p(seg_xy[indm0, sl], seg_xy[indm1, sl], 1)
+            x_sl = seg_xy[indm0, sl].astype(float)
+            y_sl = seg_xy[indm1, sl].astype(float)
             vor_mean = float(np.mean(seg_xy[indd2, sl])) if indd2 is not None else None
-        p = py[0] / px[0]
+        t = np.arange(x_sl.size, dtype=float)
+        t -= t.mean()
+        tt = np.dot(t, t)
+        if tt == 0:
+            p = np.nan
+        else:
+            slope_x = np.dot(t, x_sl) / tt
+            slope_y = np.dot(t, y_sl) / tt
+            p = slope_y / slope_x if slope_x != 0 else np.nan
         angle = 90. if np.isnan(p) else np.arctan(p) / np.pi * 180.
         return angle, vor_mean
 
