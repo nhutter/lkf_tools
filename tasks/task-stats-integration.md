@@ -59,22 +59,18 @@ Adapt internal loops: flat timestep array (`lkf_dataset.lkfs[t]`) instead of
 nested year/day structure. Classes detect old vs new structure via
 `hasattr(lkf, 'lkf_dataset')`.
 
-Work in batches of 2–4 related classes. For each batch:
-- [ ] **3a – Tests** (equivalence vs legacy class on same data)
-- [ ] **3b – Implement**
-- [ ] **3c – Run tests**
-- [ ] **3d – Docstrings**
-- [ ] **3e – Review checkpoint**
-
-Batch order (suggested):
+Batch order:
 1. `lkf_lengths` + `lkf_density`  ✓ done
-2. `lkf_curvature` + `lkf_deformation`
-3. `lkf_intersection` + `lkf_orientation`
-4. `lkf_lifetime` + `lkf_growthrate`
+2. `lkf_curvature` + `lkf_deformation`  ✓ done
+3. `lkf_intersection` + `lkf_orientation`  ✓ done (with `use_vorticity` support)
+4. `lkf_lifetime` + `lkf_growthrate`  ✓ done
+
+Also added `mask_instead=False` to `compute_MHD_segment` in `tracking.py` (needed by
+`lkf_growthrate`). `t_red > 1` index mapping fixed in `lkf_lifetime` and `lkf_growthrate`.
 
 ---
 
-## Phase C – Add stat methods to `lkf_dataset`
+## Phase C – Add stat methods to `lkf_dataset`  ✓ done (integrated with Phase B)
 
 | Method | Stat class | Cached on |
 |---|---|---|
@@ -87,34 +83,47 @@ Batch order (suggested):
 | `compute_lifetime()` | `lkf_lifetime` | `self.lifetime` |
 | `compute_growthrate()` | `lkf_growthrate` | `self.growthrate` |
 
-Each method: calls `compute_projected_coords()` if not already done, instantiates
-stat class, caches result. Integrate alongside Phase B batches.
-
 ---
 
 ## Phase D – New `lkf_collection` class
-- [ ] **3a – Tests**: construct from two `lkf_dataset` instances; verify aggregated
-  lengths/density match manual concatenation.
-- [ ] **3b – Implement** `lkf_collection` in `dataset.py`:
+- [x] **3a – Tests**: 5 tests in `test_stats_integration.py` — construct, compute_lengths,
+  flat array equality, compute_density, segment count.
+- [x] **3b – Implement** `lkf_collection` in `dataset.py`:
   - `__init__(self, datasets: list)` — list of `lkf_dataset` instances
-  - Aggregation wrappers for each stat (iterate over `self.datasets`)
-  - `load_lkf_dataset()` in `stats.py` updated to return `lkf_collection`
-- [ ] **3c – Run tests**
-- [ ] **3d – Docstrings**
-- [ ] **3e – Review checkpoint**
+  - Aggregation wrappers for all stat methods (iterate over `self.datasets`)
+  - Flat properties: `lkf_length`, `lkf_curvature`, `lkf_orientation`, `lkf_lifetime`,
+    `lkf_deformation`, `lkf_interc`
+  - `load_lkf_dataset()` in `stats.py` updated with docstring pointing to new API
+- [x] **3c – Run tests** – 48/48 pass
+- [x] **3d – Docstrings**
+- [x] **3e – Review checkpoint**
 
 ---
 
-## Phase E – Package exports & documentation
-- [ ] **Step 4a – Update `__init__.py`**: export `lkf_dataset`, `lkf_collection`
-- [ ] **Step 4b – Update README / tutorial notebook**: show new class-based API,
-  replacing standalone function calls with equivalent `lkf_dataset` method calls.
+## Phase E – Add plot functions for stat methods to `lkf_dataset`
+Add plotting routines for all statistical methods to be called with e.g. 
+`lkf_dataset.lkf_density.plot()`. Style of the plots should follow the design in 
+https://doi.org/10.1029/2021jc017666 or https://doi.org/10.5194/tc-14-93-2020
+- [x] **Step 4a – Implement**: plotting routines in `stats.py` for all 8 stat classes.
+  Feedback applied: curvature → scatter, deformation → LogNorm, density → cartopy + ice mask.
+- [x] **Step 4b – Inherent routines in `lkf_collection`**: `plot_lengths`, `plot_density`,
+  `plot_curvature`, `plot_deformation`, `plot_intersection`, `plot_orientation`, `plot_lifetime`,
+  `plot_growthrate` added to `lkf_collection`; all accept `by_dataset=True` for per-dataset overlay.
+
+---
+
+## Phase F – Package exports & documentation
+- [x] **Step 5a – Update `__init__.py`**: export `lkf_dataset`, `lkf_collection`,
+  `process_dataset`
+- [x] **Step 5b – Update README / tutorial notebook**: 28-cell statistics section added to
+  `notebooks/tutorial_gen_dataset.ipynb` covering `compute_*()`, all 8 `plot()` methods,
+  and `lkf_collection` API.
 
 ---
 
 ## Definition of done
-- All stat methods from `legacy_code/lkf_stats_tools.py` accessible via `lkf_dataset` instances
-- `lkf_collection` covers multi-year aggregation
-- Equivalence tests pass for every integrated function
-- Standalone `stats.py` classes/functions preserved (backwards compatibility)
-- Tutorial notebook runs end-to-end without errors
+- All stat methods from `legacy_code/lkf_stats_tools.py` accessible via `lkf_dataset` instances  ✓
+- `lkf_collection` covers multi-year aggregation  ✓
+- Equivalence tests pass for every integrated function  ✓
+- Standalone `stats.py` classes/functions preserved (backwards compatibility)  ✓
+- Tutorial notebook runs end-to-end without errors  (Phase E step 4b pending)
