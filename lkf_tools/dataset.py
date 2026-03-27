@@ -269,15 +269,15 @@ class lkf_dataset(object):
             np.save(self.lkfpath.joinpath('lkf_%s_%03i.npy' %(self.netcdf_file.split('/')[-1].split('.')[0],(it+1))), lkf_T)
             
             # Store lkf in object
-            self.lkfs[it+itr] = lkf
+            self.lkfs[it] = lkf
             self.timesteps_detected[it] = True
-            
+
             # Store lkf in xarray (bulk write via underlying numpy array)
             lkfs_np = self.data.lkfs.values
             for inum, ilkf in enumerate(lkf):
                 rows = ilkf[0, :].astype('int') + self.index_y[0][0]
                 cols = ilkf[1, :].astype('int') + self.index_x[0][0]
-                lkfs_np[it+itr, rows, cols] = inum
+                lkfs_np[it, rows, cols] = inum
             
             
             

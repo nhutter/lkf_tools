@@ -1453,17 +1453,15 @@ class lkf_lifetime:
             for t in range(len(lkf.lkfs)):
                 life.append(np.ones(len(lkf.lkfs[t])) if lkf.lkfs[t] is not None else None)
 
-            # With t_red > 1, lkfs[it + t_red - 1] is set for file suffix it+1.
-            # So file index NNN (1-based) maps to lkfs[NNN + t_red - 2].
-            t_red = getattr(lkf, 't_red', 1)
+            # File suffix NNN (1-based) maps to lkfs[NNN-1] (0-based outer index).
             track_path = lkf.track_output_path
             track_files = sorted([f for f in os.listdir(track_path)
                                    if f.startswith('lkf') and f.endswith('.npy')])
             for tf in track_files:
                 stem = tf[:-4]  # strip .npy
                 parts = stem.split('_to_')
-                t0 = int(parts[0].split('_')[-1]) + t_red - 2
-                t1 = int(parts[1].split('_')[-1]) + t_red - 2
+                t0 = int(parts[0].split('_')[-1]) - 1
+                t1 = int(parts[1].split('_')[-1]) - 1
                 pairs = np.load(os.path.join(track_path, tf))
                 # Non-empty case: shape (N_pairs, 2)
                 if pairs.size > 0 and pairs.ndim == 2 and pairs.shape[1] == 2:
@@ -1619,15 +1617,14 @@ class lkf_growthrate:
                       if lkf.lkfs[t] is not None else None
                       for t in range(n_t)]
 
-            t_red = getattr(lkf, 't_red', 1)
             track_path = lkf.track_output_path
             track_files = sorted([f for f in os.listdir(track_path)
                                    if f.startswith('lkf') and f.endswith('.npy')])
             for tf in track_files:
                 stem = tf[:-4]
                 parts = stem.split('_to_')
-                t0 = int(parts[0].split('_')[-1]) + t_red - 2
-                t1 = int(parts[1].split('_')[-1]) + t_red - 2
+                t0 = int(parts[0].split('_')[-1]) - 1
+                t1 = int(parts[1].split('_')[-1]) - 1
                 pairs = np.load(os.path.join(track_path, tf))
                 if pairs.size == 0 or pairs.ndim != 2 or pairs.shape[1] != 2:
                     # Empty tracking step — all segments at t1 are new
