@@ -804,12 +804,15 @@ class lkf_collection:
         if ref is None:
             raise RuntimeError("No density computed; call compute_density() first.")
         merged = np.concatenate(cubes, axis=0)  # (total_timesteps, nx, ny)
-        # Merge ice masks: cell is sea-ice if it has sea ice in ANY dataset
+        # Merge ice masks: only from datasets whose grid matches ref
         ice_mask = None
         for ds in self.datasets:
             if not hasattr(ds, 'density') or ds.density is None:
                 continue
-            m = ds.density.ice_mask
+            d = ds.density
+            if d.lkf_density.shape[1:] != ref.lkf_density.shape[1:]:
+                continue
+            m = d.ice_mask
             if m is not None:
                 ice_mask = m if ice_mask is None else (ice_mask | m)
         proxy = types.SimpleNamespace(
