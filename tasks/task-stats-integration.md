@@ -136,8 +136,9 @@ https://doi.org/10.1029/2021jc017666 or https://doi.org/10.5194/tc-14-93-2020
   when set, only pairs where both segments have `lifetime == 1` are plotted.
 - [x] **Step 6h - Store output of `stats.py` methods**: All `compute_*` methods save results as
   `stats_<name>.pkl` in `lkfpath`; `force_recompute=False` reloads from disk on subsequent calls.
-- [ ] **Step 6i - `stats.py` method without detected lkfs**: Check if lkfs were detected or
-  tracked before applying the stat method; raise a clear error if not.
+- [x] **Step 6i - `stats.py` method without detected lkfs**: `_require_detection()` and
+  `_require_tracking()` helpers added; all 8 `compute_*` methods raise `RuntimeError` with a
+  clear message if the prerequisite step has not been run.
 - [x] **Step 6i - Save date stamp in `lkf_dataset.detect_lkfs`**: `self.timestep_dates` dict
   (timestep index → `numpy.datetime64`) is populated during detection.
 - [x] **Step 6j - Comparative plotting for `lkf_collection`**: All `plot_*` methods accept
