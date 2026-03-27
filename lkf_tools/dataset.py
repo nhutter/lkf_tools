@@ -173,6 +173,22 @@ class lkf_dataset(object):
             logger.info('Writing lkf_data to pickle file: %s' %self.pickle_path)
             pickle.dump(self, output_pkl, pickle.HIGHEST_PROTOCOL)
 
+    # ── precondition guards ────────────────────────────────────────────────────
+
+    def _require_detection(self):
+        """Raise RuntimeError if no LKFs have been detected yet."""
+        if not self.timesteps_detected.any():
+            raise RuntimeError(
+                "No LKFs detected. Call detect_lkfs() before computing statistics.")
+
+    def _require_tracking(self):
+        """Raise RuntimeError if track_lkfs() has never been called."""
+        self._require_detection()
+        if not isinstance(self.tracked_lkfs, list):
+            raise RuntimeError(
+                "No tracking data found. Call track_lkfs() before "
+                "computing lifetime or growth-rate statistics.")
+
     # ── stats cache helpers ───────────────────────────────────────────────────
 
     def _stats_cache_path(self, name):
@@ -385,6 +401,7 @@ class lkf_dataset(object):
             if cached is not None:
                 self.lengths = cached
                 return self.lengths
+        self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_lengths
@@ -418,6 +435,7 @@ class lkf_dataset(object):
             if cached is not None:
                 self.density = cached
                 return self.density
+        self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_density
@@ -448,6 +466,7 @@ class lkf_dataset(object):
             if cached is not None:
                 self.curvature = cached
                 return self.curvature
+        self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_curvature
@@ -478,6 +497,7 @@ class lkf_dataset(object):
             if cached is not None:
                 self.deformation = cached
                 return self.deformation
+        self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_deformation
@@ -516,6 +536,7 @@ class lkf_dataset(object):
             if cached is not None:
                 self.intersection = cached
                 return self.intersection
+        self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_intersection
@@ -546,6 +567,7 @@ class lkf_dataset(object):
             if cached is not None:
                 self.orientation = cached
                 return self.orientation
+        self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_orientation
@@ -577,6 +599,7 @@ class lkf_dataset(object):
             if cached is not None:
                 self.lifetime = cached
                 return self.lifetime
+        self._require_tracking()
         from lkf_tools.stats import lkf_lifetime
         self.lifetime = lkf_lifetime(self)
         self._save_stats('lifetime', self.lifetime)
@@ -606,6 +629,7 @@ class lkf_dataset(object):
             if cached is not None:
                 self.growthrate = cached
                 return self.growthrate
+        self._require_tracking()
         if not hasattr(self, 'lifetime') or self.lifetime is None:
             self.compute_lifetime(force_recompute=force_recompute)
         if not hasattr(self, 'lengths') or self.lengths is None:
@@ -689,8 +713,10 @@ class lkf_dataset(object):
             np.save(self.track_output_path.joinpath('lkf_tracked_pairs_%s_to_%s' %(self.lkf_filelist[ilkf][4:-4],
                                                                  self.lkf_filelist[ilkf+1][4:-4])),
                     tracked_pairs)
-            
-            
+            if ilkf not in self.tracked_lkfs:
+                self.tracked_lkfs.append(ilkf)
+
+
 class process_dataset(lkf_dataset):
     def __init__(self,*args,**kwargs):
         super(process_dataset,self).__init__(*args,**kwargs)

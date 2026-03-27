@@ -18,14 +18,15 @@ _DEFAULT_PROJ = Proj(proj='stere', lat_0=90, lat_ts=75, lon_0=-45, ellps='WGS84'
 
 @pytest.fixture(scope="module")
 def detected_dataset(tmp_path_factory):
-    """Run detection on the first timestep and return the lkf_dataset instance."""
+    """Run detection on two timesteps + tracking, and return the lkf_dataset instance."""
     import sys
     sys.path.insert(0, str(REPO_ROOT))
     from lkf_tools.dataset import process_dataset
 
     out_dir = tmp_path_factory.mktemp("lkfs_stats")
     lkf_data = process_dataset(str(NETCDF_FILE), output_path=str(out_dir) + "/")
-    lkf_data.detect_lkfs(indexes=[0])
+    lkf_data.detect_lkfs(indexes=[0, 1])
+    lkf_data.track_lkfs(indexes=[0])
     return lkf_data
 
 
@@ -646,3 +647,39 @@ def test_collection_lkf_length_count(two_datasets):
     n_a = sum(len(ds_a.lkfs[t]) for t in range(len(ds_a.lkfs)) if ds_a.lkfs[t] is not None)
     n_b = sum(len(ds_b.lkfs[t]) for t in range(len(ds_b.lkfs)) if ds_b.lkfs[t] is not None)
     assert len(col.lkf_length) == n_a + n_b
+
+
+# ---------------------------------------------------------------------------
+# Phase G step 6i: precondition guards
+# ---------------------------------------------------------------------------
+
+def test_compute_lengths_requires_detection(tmp_path):
+    """compute_lengths() raises RuntimeError if detect_lkfs() was never called."""
+    import sys
+    sys.path.insert(0, str(REPO_ROOT))
+    from lkf_tools.dataset import process_dataset
+    ds = process_dataset(str(NETCDF_FILE), output_path=str(tmp_path) + "/")
+    with pytest.raises(RuntimeError, match="detect_lkfs"):
+        ds.compute_lengths()
+
+
+def test_compute_lifetime_requires_tracking(tmp_path):
+    """compute_lifetime() raises RuntimeError if track_lkfs() was never called."""
+    import sys
+    sys.path.insert(0, str(REPO_ROOT))
+    from lkf_tools.dataset import process_dataset
+    ds = process_dataset(str(NETCDF_FILE), output_path=str(tmp_path) + "/")
+    ds.detect_lkfs(indexes=[0])
+    with pytest.raises(RuntimeError, match="tracking"):
+        ds.compute_lifetime()
+
+
+def test_compute_growthrate_requires_tracking(tmp_path):
+    """compute_growthrate() raises RuntimeError if track_lkfs() was never called."""
+    import sys
+    sys.path.insert(0, str(REPO_ROOT))
+    from lkf_tools.dataset import process_dataset
+    ds = process_dataset(str(NETCDF_FILE), output_path=str(tmp_path) + "/")
+    ds.detect_lkfs(indexes=[0])
+    with pytest.raises(RuntimeError, match="tracking"):
+        ds.compute_growthrate()
