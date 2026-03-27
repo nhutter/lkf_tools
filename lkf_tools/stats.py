@@ -1221,7 +1221,8 @@ class lkf_intersection:
             if use_vorticity:
                 self.lkf_interc_type = np.array(lkf_interc_type, dtype=object)
 
-    def plot(self, ax=None, bins=18, color0='C0', color1='C1', lifetime=None):
+    def plot(self, ax=None, bins=18, color0='C0', color1='C1', lifetime=None,
+             intersection_type='both', label=None):
         """Plot a histogram of LKF intersection angles.
 
         Without vorticity (``use_vorticity=False``) angles are folded into
@@ -1246,17 +1247,31 @@ class lkf_intersection:
         lifetime : lkf_lifetime, optional
             When provided, restrict the histogram to intersection pairs where
             **both** segments have ``lifetime == 1`` (newly formed LKFs only).
+        intersection_type : {'both', 'opp', 'same'}, optional
+            Which intersection types to include (only effective when
+            ``use_vorticity=True``).  ``'opp'`` shows only Type 0 (opposite
+            vorticity); ``'same'`` shows only Type 1 (same vorticity);
+            ``'both'`` (default) shows both.
+        label : str or None, optional
+            Label prefix attached to histogram bars.  When ``None`` the
+            default type descriptions are used.  When set, type-0 bars are
+            labelled ``'{label} (opp.)'``, type-1 bars ``'{label} (same)'``
+            (with vorticity), or just ``label`` for single-bar mode.
 
         Returns
         -------
         fig, ax : Figure and Axes objects.
         """
+        use_vorticity = getattr(self, 'use_vorticity', False)
+
         all_ang = _flatten_obj(self.lkf_interc)
+        # Populate type array early so filters can use it
         all_type = None
+        if use_vorticity and hasattr(self, 'lkf_interc_type'):
+            all_type = _flatten_obj(self.lkf_interc_type)
 
         # Optionally filter to newly-formed pairs (both segments lifetime == 1)
         if lifetime is not None and hasattr(self, 'lkf_interc_par'):
-            uv = getattr(self, 'use_vorticity', False)
             filtered_ang = []
             filtered_type = []
             for t in range(len(self.lkf_interc)):
@@ -1266,7 +1281,7 @@ class lkf_intersection:
                 pairs  = self.lkf_interc_par[t]
                 lts    = lifetime.lkf_lifetime[t] if t < len(lifetime.lkf_lifetime) else np.array([])
                 ty_t   = (self.lkf_interc_type[t]
-                          if (uv and hasattr(self, 'lkf_interc_type')
+                          if (use_vorticity and hasattr(self, 'lkf_interc_type')
                               and t < len(self.lkf_interc_type))
                           else [])
                 for k, (ang, pair) in enumerate(zip(angles, pairs)):
@@ -1274,48 +1289,52 @@ class lkf_intersection:
                     j_lt = lts[pair[1]] if pair[1] < len(lts) else np.nan
                     if i_lt == 1 and j_lt == 1:
                         filtered_ang.append(ang)
-                        if uv and k < len(ty_t):
+                        if use_vorticity and k < len(ty_t):
                             filtered_type.append(ty_t[k])
             all_ang = np.array(filtered_ang)
-            if uv and filtered_type:
-                all_type = np.array(filtered_type)
+            all_type = np.array(filtered_type) if (use_vorticity and filtered_type) else None
+
+        # Filter by intersection type (only meaningful with vorticity)
+        if intersection_type != 'both' and use_vorticity and all_type is not None and len(all_type):
+            type_val = 0 if intersection_type == 'opp' else 1
+            mask = all_type == type_val
+            all_ang = all_ang[mask]
+            all_type = all_type[mask]
 
         if ax is None:
             fig, ax = plt.subplots(figsize=(5, 4))
         else:
             fig = ax.figure
 
-        use_vorticity = getattr(self, 'use_vorticity', False)
-
-        if use_vorticity and hasattr(self, 'lkf_interc_type'):
-            # Use pre-filtered all_type if available (from lifetime filter), else flatten
-            if all_type is None:
-                all_type = _flatten_obj(self.lkf_interc_type)
-            ang_range = (0, 180)
+        if use_vorticity and all_type is not None and len(all_type):
             bin_edges = np.linspace(0, 180, bins + 1)
             ang0 = all_ang[all_type == 0]
             ang1 = all_ang[all_type == 1]
+            if label is not None:
+                lbl0 = f'{label} (opp.)' if intersection_type == 'both' else label
+                lbl1 = f'{label} (same)' if intersection_type == 'both' else label
+            else:
+                lbl0 = 'Type 0 (opp. vorticity)'
+                lbl1 = 'Type 1 (same vorticity)'
             if len(ang0):
                 ax.hist(ang0, bins=bin_edges, density=True, alpha=0.7,
-                        color=color0, edgecolor='white', lw=0.4,
-                        label='Type 0 (opp. vorticity)')
+                        color=color0, edgecolor='white', lw=0.4, label=lbl0)
             if len(ang1):
                 ax.hist(ang1, bins=bin_edges, density=True, alpha=0.7,
-                        color=color1, edgecolor='white', lw=0.4,
-                        label='Type 1 (same vorticity)')
+                        color=color1, edgecolor='white', lw=0.4, label=lbl1)
             ax.legend(fontsize=8)
             ax.set_xlim(0, 180)
             ax.set_xlabel('Intersection angle (°)')
         else:
             bin_edges = np.linspace(0, 90, bins + 1)
             ax.hist(all_ang[all_ang >= 0], bins=bin_edges, density=True,
-                    color=color0, edgecolor='white', lw=0.4)
+                    color=color0, edgecolor='white', lw=0.4, label=label)
             ax.set_xlim(0, 90)
             ax.set_xlabel('Intersection angle (°)')
 
         if len(all_ang):
             med = np.median(all_ang[all_ang >= 0])
-            ax.axvline(med, color='k', ls='--', lw=1,
+            ax.axvline(med, color=color0, ls='--', lw=1,
                        label=f'median = {med:.1f}°')
             ax.legend(fontsize=8)
 
@@ -1543,7 +1562,7 @@ class lkf_lifetime:
             coeff = np.polyfit(xf, np.log(yf), 1)
             x_fit = np.linspace(centres[0], centres[-1], 200)
             ax.plot(x_fit, np.exp(np.polyval(coeff, x_fit)), '-',
-                    color='k', lw=1.5,
+                    color=color, lw=1.5,
                     label=r'$\lambda={:.2f}$'.format(-coeff[0]))
             ax.legend(fontsize=9)
 

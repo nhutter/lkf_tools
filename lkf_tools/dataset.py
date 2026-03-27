@@ -756,10 +756,11 @@ class lkf_collection:
     >>> all_lengths_km = col.lkf_length / 1e3
     """
 
-    def __init__(self, datasets, label=None, by_dataset=False):
+    def __init__(self, datasets, label=None, by_dataset=False, color=None):
         self.datasets = list(datasets)
         self.label = label
         self.by_dataset = by_dataset
+        self.color = color
 
     # ── internal helpers ──────────────────────────────────────────────────────
 
@@ -907,6 +908,31 @@ class lkf_collection:
         return np.concatenate(parts) if parts else np.array([])
 
     @property
+    def lkf_interc_type(self):
+        """Flat integer array of intersection types (0/1) across all datasets.
+
+        Only populated when all datasets were computed with ``use_vorticity=True``.
+        Returns an empty array if type information is unavailable.
+        """
+        parts = []
+        for ds in self.datasets:
+            if isinstance(ds, lkf_collection):
+                a = ds.lkf_interc_type
+                if len(a) > 0:
+                    parts.append(a)
+            else:
+                if not hasattr(ds, 'intersection'):
+                    continue
+                itype = getattr(ds.intersection, 'lkf_interc_type', None)
+                if itype is None:
+                    continue
+                for t in self._detected(ds):
+                    a = itype[t]
+                    if len(a) > 0:
+                        parts.append(np.asarray(a, dtype=int))
+        return np.concatenate(parts).astype(int) if parts else np.array([], dtype=int)
+
+    @property
     def lkf_growth(self):
         """Flat array of segment growth rates (m per timestep) across all datasets."""
         return self._flat_1d('growthrate', 'lkf_growth')
@@ -915,6 +941,62 @@ class lkf_collection:
     def lkf_shrink(self):
         """Flat array of segment shrink rates (m per timestep) across all datasets."""
         return self._flat_1d('growthrate', 'lkf_shrink')
+
+    def _get_interc_arrays(self, lifetime_val=None):
+        """Aggregate intersection angles and types across all flat datasets.
+
+        Parameters
+        ----------
+        lifetime_val : int or None
+            When not None, only include pairs where both segments have
+            ``lifetime == lifetime_val`` according to each dataset's own
+            ``lifetime`` object.
+
+        Returns
+        -------
+        ang_flat : np.ndarray
+            1-D array of intersection angles.
+        type_flat : np.ndarray of int
+            1-D integer array of types (0 = opp. vorticity, 1 = same vorticity).
+            Empty if no vorticity data is available.
+        """
+        ang_parts = []
+        type_parts = []
+        for ds, _ in self._iter_flat_datasets():
+            if not hasattr(ds, 'intersection') or ds.intersection is None:
+                continue
+            itype = getattr(ds.intersection, 'lkf_interc_type', None)
+            ipar  = getattr(ds.intersection, 'lkf_interc_par', None)
+            lt_obj = ds.__dict__.get('lifetime') if lifetime_val is not None else None
+            for t in self._detected(ds):
+                angs = ds.intersection.lkf_interc[t]
+                if len(angs) == 0:
+                    continue
+                angs  = np.asarray(angs, dtype=float)
+                types = (np.asarray(itype[t], dtype=int)
+                         if (itype is not None and t < len(itype) and len(itype[t]))
+                         else None)
+                if (lifetime_val is not None and lt_obj is not None
+                        and ipar is not None and t < len(ipar) and len(ipar[t])):
+                    lts   = (lt_obj.lkf_lifetime[t]
+                             if t < len(lt_obj.lkf_lifetime) else np.array([]))
+                    pairs = ipar[t]
+                    mask  = np.array([
+                        (int(p[0]) < len(lts) and lts[int(p[0])] == lifetime_val and
+                         int(p[1]) < len(lts) and lts[int(p[1])] == lifetime_val)
+                        for p in pairs
+                    ], dtype=bool)
+                    angs  = angs[mask]
+                    if types is not None:
+                        types = types[mask]
+                if len(angs) == 0:
+                    continue
+                ang_parts.append(angs)
+                if types is not None and len(types) == len(angs):
+                    type_parts.append(types)
+        ang_flat  = np.concatenate(ang_parts)  if ang_parts  else np.array([])
+        type_flat = np.concatenate(type_parts).astype(int) if type_parts else np.array([], dtype=int)
+        return ang_flat, type_flat
 
     # ── plotting methods ──────────────────────────────────────────────────────
 
@@ -929,6 +1011,12 @@ class lkf_collection:
     def _elem_label(elem, i):
         """Return the label for dataset *elem* (index *i*), or a fallback."""
         return getattr(elem, 'label', None) or f'Dataset {i + 1}'
+
+    @staticmethod
+    def _elem_color(elem, i, colors):
+        """Return the effective colour for *elem*: ``elem.color`` if set, else ``colors[i]``."""
+        c = getattr(elem, 'color', None)
+        return c if c is not None else colors[i]
 
     def _iter_flat_datasets(self):
         """Yield (lkf_dataset, label) pairs, recursing into nested collections."""
@@ -945,14 +1033,14 @@ class lkf_collection:
         Parameters
         ----------
         by_dataset : bool or None, optional
-            When ``True`` overlay one line per element and a bold mean line.
+            When ``True`` overlay one line per element with a power-law fit each.
             When ``False`` all data are pooled.  ``None`` (default) inherits
             ``self.by_dataset``.
         colors : list, optional
             Per-element colours (``tab10`` by default).
         color : str, optional
-            Override colour for the merged line (used by parent collections in
-            nested mode).
+            Override colour for the pooled line (used by parent collections in
+            nested mode).  Falls back to ``self.color`` when *None*.
 
         Returns
         -------
@@ -964,9 +1052,10 @@ class lkf_collection:
         if not by_dataset:
             proxy = types.SimpleNamespace(
                 lkf_length=self._wrap_flat(self.lkf_length))
+            eff_color = color if color is not None else self.color
             kw = {'bins': bins, 'fit': fit}
-            if color is not None:
-                kw['color'] = color
+            if eff_color is not None:
+                kw['color'] = eff_color
             return lkf_lengths.plot(proxy, ax=ax, **kw)
 
         if ax is None:
@@ -977,21 +1066,17 @@ class lkf_collection:
         colors = colors if colors is not None else cmap
         for i, elem in enumerate(self.datasets):
             elem_label = self._elem_label(elem, i)
+            elem_color = self._elem_color(elem, i, colors)
             if isinstance(elem, lkf_collection):
                 elem.plot_lengths(ax=ax, by_dataset=elem.by_dataset,
-                                  bins=bins, fit=False, color=colors[i])
+                                  bins=bins, fit=fit, color=elem_color)
             else:
                 if not hasattr(elem, 'lengths') or elem.lengths is None:
                     continue
                 lkf_lengths.plot(elem.lengths, ax=ax, bins=bins,
-                                 color=colors[i], fit=False)
-            ax.plot([], [], 'o-', color=colors[i], ms=4, lw=1.5,
+                                 color=elem_color, fit=fit)
+            ax.plot([], [], 'o-', color=elem_color, ms=4, lw=1.5,
                     label=elem_label)
-        # Bold merged line
-        proxy = types.SimpleNamespace(lkf_length=self._wrap_flat(self.lkf_length))
-        lkf_lengths.plot(proxy, ax=ax, bins=bins, color='k', fit=fit)
-        mean_label = f'Mean ({self.label})' if self.label else 'Mean'
-        ax.plot([], [], 'k-o', ms=4, lw=2, label=mean_label)
         ax.legend(fontsize=8)
         ax.set_title('LKF length distribution')
         return fig, ax
@@ -1032,7 +1117,9 @@ class lkf_collection:
                     if m is not None:
                         ice_mask = m if ice_mask is None else (ice_mask | m)
             if ref is None:
-                raise RuntimeError("No density computed; call compute_density() first.")
+                raise RuntimeError(
+                    "No density data found. Call compute_density() on each "
+                    "dataset before plotting.")
             merged = np.concatenate(cubes, axis=0)
             proxy = types.SimpleNamespace(
                 lkf_density=merged, res=ref.res,
@@ -1076,7 +1163,9 @@ class lkf_collection:
 
         n = len(panels)
         if n == 0:
-            raise RuntimeError("No density computed; call compute_density() first.")
+            raise RuntimeError(
+                "No density data found for any element. Call compute_density() "
+                "on the collection before plotting.")
         # Build GeoAxes when coastlines are requested (matches lkf_density.plot behaviour)
         subplot_kw = {}
         if kw.get('coastlines', True):
@@ -1131,17 +1220,18 @@ class lkf_collection:
         colors = colors if colors is not None else cmap
         for i, elem in enumerate(self.datasets):
             elem_label = self._elem_label(elem, i)
+            elem_color = self._elem_color(elem, i, colors)
             if isinstance(elem, lkf_collection):
                 elem.plot_curvature(ax=ax, by_dataset=elem.by_dataset,
-                                    colors=[colors[i]])
+                                    colors=[elem_color])
             else:
                 if not hasattr(elem, 'curvature') or elem.curvature is None:
                     continue
                 lkf_curvature.plot(elem.curvature, arc_lengths=elem.lengths,
-                                   ax=ax, color=colors[i],
+                                   ax=ax, color=elem_color,
                                    alpha=kw.get('alpha', 0.2),
                                    s=kw.get('s', 3))
-            ax.plot([], [], 'o', color=colors[i], ms=4, label=elem_label)
+            ax.plot([], [], 'o', color=elem_color, ms=4, label=elem_label)
         ax.legend(fontsize=8)
         ax.set_title('LKF arc-length vs chord-length')
         return fig, ax
@@ -1161,7 +1251,8 @@ class lkf_collection:
         return lkf_deformation.plot(proxy, ax=ax, **kw)
 
     def plot_intersection(self, by_dataset=None, ax=None, bins=18,
-                          colors=None, **kw):
+                          colors=None, use_vorticity=None,
+                          intersection_type='both', lifetime=None, **kw):
         """Plot histogram of LKF intersection angles.
 
         Parameters
@@ -1170,6 +1261,18 @@ class lkf_collection:
             When ``True`` overlay one faint histogram per element (with label)
             and a bold merged histogram.  ``None`` (default) inherits
             ``self.by_dataset``.
+        use_vorticity : bool or None, optional
+            Override whether to use the vorticity-based [0, 180°] mode.
+            ``None`` (default) reads the flag stored on the first found
+            ``intersection`` object.
+        intersection_type : {'both', 'opp', 'same'}, optional
+            Which intersection types to include (only effective when
+            ``use_vorticity=True``).  ``'opp'`` → Type 0 (opposite vorticity);
+            ``'same'`` → Type 1 (same vorticity); ``'both'`` (default) → both.
+        lifetime : int or None, optional
+            When set (e.g. ``lifetime=1``), restrict to pairs where **both**
+            segments have that lifetime value, using each dataset's own
+            ``lifetime`` object.
 
         Returns
         -------
@@ -1178,22 +1281,35 @@ class lkf_collection:
         if by_dataset is None:
             by_dataset = self.by_dataset
         from lkf_tools.stats import lkf_intersection
-        uv = True
+        # Determine use_vorticity from stored data unless caller overrides
+        uv_stored = True
         for ds in self.datasets:
             if isinstance(ds, lkf_collection):
                 for sub, _ in ds._iter_flat_datasets():
                     if hasattr(sub, 'intersection') and sub.intersection is not None:
-                        uv = getattr(sub.intersection, 'use_vorticity', True)
+                        uv_stored = getattr(sub.intersection, 'use_vorticity', True)
                         break
             elif hasattr(ds, 'intersection') and ds.intersection is not None:
-                uv = getattr(ds.intersection, 'use_vorticity', True)
+                uv_stored = getattr(ds.intersection, 'use_vorticity', True)
                 break
+        uv = uv_stored if use_vorticity is None else use_vorticity
+
+        def _make_proxy_from_arrays(ang_flat, type_flat):
+            """Build a SimpleNamespace suitable for lkf_intersection.plot()."""
+            ns = types.SimpleNamespace(
+                lkf_interc=self._wrap_flat(ang_flat), use_vorticity=uv)
+            if uv and len(type_flat):
+                # _wrap_flat casts to float; types must stay int
+                wrapped_type = np.empty(1, dtype=object)
+                wrapped_type[0] = type_flat.astype(int)
+                ns.lkf_interc_type = wrapped_type
+            return ns
 
         if not by_dataset:
-            proxy = types.SimpleNamespace(
-                lkf_interc=self._wrap_flat(self.lkf_interc),
-                use_vorticity=uv)
-            return lkf_intersection.plot(proxy, ax=ax, bins=bins, **kw)
+            ang_flat, type_flat = self._get_interc_arrays(lifetime_val=lifetime)
+            proxy = _make_proxy_from_arrays(ang_flat, type_flat)
+            return lkf_intersection.plot(proxy, ax=ax, bins=bins,
+                                         intersection_type=intersection_type, **kw)
 
         if ax is None:
             fig, ax = plt.subplots(figsize=(5, 4))
@@ -1203,36 +1319,36 @@ class lkf_collection:
         colors = colors if colors is not None else cmap
         for i, elem in enumerate(self.datasets):
             elem_label = self._elem_label(elem, i)
+            # Aggregate flat arrays for this element (dataset or nested collection)
             if isinstance(elem, lkf_collection):
-                elem.plot_intersection(ax=ax, by_dataset=elem.by_dataset,
-                                       bins=bins, colors=[colors[i]])
+                ang_e, type_e = elem._get_interc_arrays(lifetime_val=lifetime)
             else:
                 if not hasattr(elem, 'intersection') or elem.intersection is None:
                     continue
-                sub = types.SimpleNamespace(
-                    lkf_interc=elem.intersection.lkf_interc, use_vorticity=uv)
-                lkf_intersection.plot(sub, ax=ax, bins=bins,
-                                      color0=colors[i], color1=colors[i])
-            ax.plot([], [], '-', color=colors[i], lw=2, label=elem_label)
-        proxy = types.SimpleNamespace(lkf_interc=self._wrap_flat(self.lkf_interc),
-                                      use_vorticity=uv)
-        lkf_intersection.plot(proxy, ax=ax, bins=bins,
-                              color0='k', color1='0.4')
-        ax.plot([], [], 'k-', lw=2.5,
-                label=f'Mean ({self.label})' if self.label else 'Mean')
+                tmp = lkf_collection([elem])
+                ang_e, type_e = tmp._get_interc_arrays(lifetime_val=lifetime)
+            if len(ang_e) == 0:
+                continue
+            sub = _make_proxy_from_arrays(ang_e, type_e)
+            lkf_intersection.plot(sub, ax=ax, bins=bins,
+                                  color0=colors[i], color1=colors[i],
+                                  intersection_type=intersection_type,
+                                  label=elem_label)
         ax.legend(fontsize=8)
         ax.set_title('LKF intersection angles')
         return fig, ax
 
     def plot_orientation(self, by_dataset=None, ax=None, bins=36,
-                         colors=None, **kw):
+                         colors=None, color=None, **kw):
         """Polar rose diagram of LKF orientations.
 
         Parameters
         ----------
         by_dataset : bool or None, optional
-            When ``True`` overlay one rose per element (with label) and bold mean.
+            When ``True`` overlay one rose per element.
             ``None`` (default) inherits ``self.by_dataset``.
+        color : str, optional
+            Override colour for the pooled rose.  Falls back to ``self.color``.
 
         Returns
         -------
@@ -1244,7 +1360,11 @@ class lkf_collection:
         if not by_dataset:
             proxy = types.SimpleNamespace(
                 lkf_orientation=self._wrap_flat(self.lkf_orientation))
-            return lkf_orientation.plot(proxy, ax=ax, bins=bins, **kw)
+            eff_color = color if color is not None else self.color
+            plot_kw = dict(kw)
+            if eff_color is not None:
+                plot_kw['color'] = eff_color
+            return lkf_orientation.plot(proxy, ax=ax, bins=bins, **plot_kw)
 
         if ax is None:
             fig, ax = plt.subplots(figsize=(5, 5),
@@ -1255,34 +1375,32 @@ class lkf_collection:
         colors = colors if colors is not None else cmap
         for i, elem in enumerate(self.datasets):
             elem_label = self._elem_label(elem, i)
+            elem_color = self._elem_color(elem, i, colors)
             if isinstance(elem, lkf_collection):
                 elem.plot_orientation(ax=ax, by_dataset=elem.by_dataset,
-                                      bins=bins, colors=[colors[i]])
+                                      bins=bins, color=elem_color)
             else:
                 if not hasattr(elem, 'orientation') or elem.orientation is None:
                     continue
                 lkf_orientation.plot(elem.orientation, ax=ax, bins=bins,
-                                     color=colors[i],
+                                     color=elem_color,
                                      density=kw.get('density', True))
-            ax.plot([], [], '-', color=colors[i], lw=2, label=elem_label)
-        proxy = types.SimpleNamespace(
-            lkf_orientation=self._wrap_flat(self.lkf_orientation))
-        lkf_orientation.plot(proxy, ax=ax, bins=bins, color='k',
-                             density=kw.get('density', True))
-        ax.plot([], [], 'k-', lw=2.5,
-                label=f'Mean ({self.label})' if self.label else 'Mean')
+            ax.plot([], [], '-', color=elem_color, lw=2, label=elem_label)
         ax.legend(fontsize=8, loc='upper right')
         ax.set_title('LKF orientation')
         return fig, ax
 
-    def plot_lifetime(self, by_dataset=None, ax=None, colors=None, **kw):
+    def plot_lifetime(self, by_dataset=None, ax=None, colors=None, color=None,
+                      **kw):
         """Log-histogram of LKF lifetimes with exponential fit.
 
         Parameters
         ----------
         by_dataset : bool or None, optional
-            When ``True`` overlay one line per element (with label) and bold mean.
-            ``None`` (default) inherits ``self.by_dataset``.
+            When ``True`` overlay one line per element with an exponential fit
+            each.  ``None`` (default) inherits ``self.by_dataset``.
+        color : str, optional
+            Override colour for the pooled line.  Falls back to ``self.color``.
 
         Returns
         -------
@@ -1294,7 +1412,11 @@ class lkf_collection:
         if not by_dataset:
             proxy = types.SimpleNamespace(
                 lkf_lifetime=self._wrap_flat(self.lkf_lifetime))
-            return lkf_lifetime.plot(proxy, ax=ax, **kw)
+            eff_color = color if color is not None else self.color
+            plot_kw = dict(kw)
+            if eff_color is not None:
+                plot_kw['color'] = eff_color
+            return lkf_lifetime.plot(proxy, ax=ax, **plot_kw)
 
         if ax is None:
             fig, ax = plt.subplots(figsize=(5, 4))
@@ -1304,32 +1426,31 @@ class lkf_collection:
         colors = colors if colors is not None else cmap
         for i, elem in enumerate(self.datasets):
             elem_label = self._elem_label(elem, i)
+            elem_color = self._elem_color(elem, i, colors)
             if isinstance(elem, lkf_collection):
                 elem.plot_lifetime(ax=ax, by_dataset=elem.by_dataset,
-                                   colors=[colors[i]])
+                                   color=elem_color, **kw)
             else:
                 if not hasattr(elem, 'lifetime') or elem.lifetime is None:
                     continue
-                lkf_lifetime.plot(elem.lifetime, ax=ax, color=colors[i],
+                lkf_lifetime.plot(elem.lifetime, ax=ax, color=elem_color,
                                   fit=kw.get('fit', True))
-            ax.plot([], [], '-', color=colors[i], lw=2, label=elem_label)
-        proxy = types.SimpleNamespace(
-            lkf_lifetime=self._wrap_flat(self.lkf_lifetime))
-        lkf_lifetime.plot(proxy, ax=ax, color='k', fit=kw.get('fit', True))
-        ax.plot([], [], 'k-', lw=2.5,
-                label=f'Mean ({self.label})' if self.label else 'Mean')
+            ax.plot([], [], '-', color=elem_color, lw=2, label=elem_label)
         ax.legend(fontsize=8)
         ax.set_title('LKF lifetime distribution')
         return fig, ax
 
-    def plot_growthrate(self, by_dataset=None, ax=None, colors=None, **kw):
+    def plot_growthrate(self, by_dataset=None, ax=None, colors=None, color=None,
+                        **kw):
         """Log-log PDFs of LKF growth and shrink rates.
 
         Parameters
         ----------
         by_dataset : bool or None, optional
-            When ``True`` overlay one line per element (with label) plus bold mean.
+            When ``True`` overlay one line per element with a power-law fit each.
             ``None`` (default) inherits ``self.by_dataset``.
+        color : str, optional
+            Override colour for the pooled lines.  Falls back to ``self.color``.
 
         Returns
         -------
@@ -1345,7 +1466,12 @@ class lkf_collection:
             wrapped_s[0] = np.asarray(self.lkf_shrink, dtype=float)
             proxy = types.SimpleNamespace(lkf_growth=wrapped_g,
                                           lkf_shrink=wrapped_s)
-            return lkf_growthrate.plot(proxy, ax=ax, **kw)
+            eff_color = color if color is not None else self.color
+            plot_kw = dict(kw)
+            if eff_color is not None:
+                plot_kw.setdefault('color_growth', eff_color)
+                plot_kw.setdefault('color_shrink', eff_color)
+            return lkf_growthrate.plot(proxy, ax=ax, **plot_kw)
 
         if ax is None:
             fig, axes = plt.subplots(1, 2, figsize=(10, 4))
@@ -1356,26 +1482,18 @@ class lkf_collection:
         colors = colors if colors is not None else cmap
         for i, elem in enumerate(self.datasets):
             elem_label = self._elem_label(elem, i)
+            elem_color = self._elem_color(elem, i, colors)
             if isinstance(elem, lkf_collection):
                 elem.plot_growthrate(ax=axes, by_dataset=elem.by_dataset,
-                                     colors=[colors[i]])
+                                     color=elem_color, **kw)
             else:
                 if not hasattr(elem, 'growthrate') or elem.growthrate is None:
                     continue
                 lkf_growthrate.plot(elem.growthrate, ax=axes,
-                                    color_growth=colors[i],
-                                    color_shrink=colors[i],
+                                    color_growth=elem_color,
+                                    color_shrink=elem_color,
                                     fit=kw.get('fit', True))
-            axes[0].plot([], [], '-', color=colors[i], lw=2, label=elem_label)
-        wrapped_g = np.empty(1, dtype=object)
-        wrapped_g[0] = np.asarray(self.lkf_growth, dtype=float)
-        wrapped_s = np.empty(1, dtype=object)
-        wrapped_s[0] = np.asarray(self.lkf_shrink, dtype=float)
-        proxy = types.SimpleNamespace(lkf_growth=wrapped_g, lkf_shrink=wrapped_s)
-        lkf_growthrate.plot(proxy, ax=axes, color_growth='k',
-                            color_shrink='0.4', fit=kw.get('fit', True))
-        mean_label = f'Mean ({self.label})' if self.label else 'Mean'
-        axes[0].plot([], [], 'k-', lw=2.5, label=mean_label)
+            axes[0].plot([], [], '-', color=elem_color, lw=2, label=elem_label)
         axes[0].legend(fontsize=8)
         axes[0].set_title('Growth rate')
         axes[1].set_title('Shrink rate')
