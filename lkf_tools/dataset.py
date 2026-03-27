@@ -248,9 +248,9 @@ class lkf_dataset(object):
         
                 # Check if deformation rates are given
                 if self._has_deformation_rates:
-                    div = self.data.div[it+itr,:,:]
-                    shr = self.data.shr[it+itr,:,:]
-                    vor = self.data.vor[it+itr,:,:]
+                    div = self.data.div[it+itr,1:-1,1:-1]
+                    shr = self.data.shr[it+itr,1:-1,1:-1]
+                    vor = self.data.vor[it+itr,1:-1,1:-1]
                 else:
                     dudx = ((uice[2:,:]-uice[:-2,:])/(self.dxu[:-2,:]+self.dxu[1:-1,:]))[:,1:-1]
                     dvdx = ((vice[2:,:]-vice[:-2,:])/(self.dxu[:-2,:]+self.dxu[1:-1,:]))[:,1:-1]
