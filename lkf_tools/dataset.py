@@ -780,9 +780,10 @@ class lkf_collection:
     >>> all_lengths_km = col.lkf_length / 1e3
     """
 
-    def __init__(self, datasets, label=None, by_dataset=False, color=None):
+    def __init__(self, datasets, label=None, labels=None, by_dataset=False, color=None):
         self.datasets = list(datasets)
-        self.label = label
+        self.label = label        # name of *this* collection (shown when nested)
+        self.labels = labels      # per-element labels list (one entry per dataset)
         self.by_dataset = by_dataset
         self.color = color
 
@@ -1032,8 +1033,14 @@ class lkf_collection:
         return out
 
     @staticmethod
-    def _elem_label(elem, i):
-        """Return the label for dataset *elem* (index *i*), or a fallback."""
+    def _elem_label(self, elem, i):
+        """Return the display label for element *i*.
+
+        Priority: ``self.labels[i]`` (per-element override on this collection)
+        > ``elem.label`` (label stored on the element itself) > ``'Dataset N'``.
+        """
+        if self.labels is not None and i < len(self.labels) and self.labels[i] is not None:
+            return self.labels[i]
         return getattr(elem, 'label', None) or f'Dataset {i + 1}'
 
     @staticmethod
