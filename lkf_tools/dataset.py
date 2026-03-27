@@ -217,6 +217,16 @@ class lkf_dataset(object):
             self.lkf_filelist = [i for i in os.listdir(self.lkfpath) if i.startswith('lkf') and i.endswith('.npy')]
             self.lkf_filelist.sort()
             self.ind_detect = [int(i.split('.')[0].split('_')[-1]) for i in self.lkf_filelist]
+            # Load already-detected LKFs that are not yet in memory.
+            # On disk segments are stored transposed (N_points, N_cols);
+            # in memory we keep the non-transposed (N_cols, N_points) layout.
+            for fname, file_idx in zip(self.lkf_filelist, self.ind_detect):
+                it = file_idx - 1
+                if it < len(self.lkfs) and self.lkfs[it] is None:
+                    lkf_saved = np.load(self.lkfpath.joinpath(fname),
+                                        allow_pickle=True)
+                    self.lkfs[it] = [seg.T for seg in lkf_saved]
+                    self.timesteps_detected[it] = True
         else:
             self.ind_detect = []
 
@@ -1003,54 +1013,72 @@ class lkf_collection:
 
         if not by_dataset:
             # ── merged mode ──────────────────────────────────────────────────
-            cubes = []
-            ref = None
-            for ds in self.datasets:
-                d = ds.density if hasattr(ds, 'density') else None
-                if isinstance(ds, lkf_collection):
-                    # recurse: treat inner collection as one merged density
-                    try:
-                        _, _, _ = ds.plot_density(by_dataset=False, **kw)
-                    except Exception:
-                        pass
-                    continue
+            # Flatten through nested collections using _iter_flat_datasets so
+            # that nested lkf_collection elements are handled transparently.
+            cubes, ref, ice_mask = [], None, None
+            for ds, _ in self._iter_flat_datasets():
+                d = ds.__dict__.get('density')
                 if d is None:
                     continue
                 if ref is None:
                     ref = d
                 if d.lkf_density.shape[1:] == ref.lkf_density.shape[1:]:
                     cubes.append(d.lkf_density)
+                    m = d.ice_mask
+                    if m is not None:
+                        ice_mask = m if ice_mask is None else (ice_mask | m)
             if ref is None:
                 raise RuntimeError("No density computed; call compute_density() first.")
             merged = np.concatenate(cubes, axis=0)
-            ice_mask = None
-            for ds in self.datasets:
-                if isinstance(ds, lkf_collection) or not hasattr(ds, 'density'):
-                    continue
-                d = ds.density
-                if d.lkf_density.shape[1:] != ref.lkf_density.shape[1:]:
-                    continue
-                m = d.ice_mask
-                if m is not None:
-                    ice_mask = m if ice_mask is None else (ice_mask | m)
             proxy = types.SimpleNamespace(
                 lkf_density=merged, res=ref.res,
                 xedg=ref.xedg, yedg=ref.yedg, ice_mask=ice_mask)
             return lkf_density_cls.plot(proxy, ax=ax, **kw)
 
         # ── per-dataset mode ──────────────────────────────────────────────────
-        flat_ds = [(elem, self._elem_label(elem, i))
-                   for i, elem in enumerate(self.datasets)
-                   if hasattr(elem, 'density') and not isinstance(elem, lkf_collection)]
-        n = len(flat_ds)
+        # Build a list of (proxy, label) pairs — one entry per top-level element.
+        # lkf_dataset elements use their own density object; lkf_collection
+        # elements are reduced to a merged density proxy so each inner
+        # collection occupies exactly one subplot.
+        def _merged_proxy(col):
+            """Return a merged lkf_density-like namespace for an lkf_collection."""
+            cubes, ref, ice_mask = [], None, None
+            for ds, _ in col._iter_flat_datasets():
+                d = ds.__dict__.get('density')
+                if d is None:
+                    continue
+                if ref is None:
+                    ref = d
+                if d.lkf_density.shape[1:] == ref.lkf_density.shape[1:]:
+                    cubes.append(d.lkf_density)
+                    m = d.ice_mask
+                    if m is not None:
+                        ice_mask = m if ice_mask is None else (ice_mask | m)
+            if ref is None:
+                return None
+            return types.SimpleNamespace(
+                lkf_density=np.concatenate(cubes, axis=0),
+                res=ref.res, xedg=ref.xedg, yedg=ref.yedg, ice_mask=ice_mask)
+
+        panels = []
+        for i, elem in enumerate(self.datasets):
+            lbl = self._elem_label(elem, i)
+            if isinstance(elem, lkf_collection):
+                proxy = _merged_proxy(elem)
+            else:
+                proxy = elem.__dict__.get('density')
+            if proxy is not None:
+                panels.append((proxy, lbl))
+
+        n = len(panels)
         if n == 0:
             raise RuntimeError("No density computed; call compute_density() first.")
         fig, axes = plt.subplots(1, n, figsize=(6 * n, 6),
                                  squeeze=False)
         axes = axes[0]
         pcms = []
-        for idx, (ds, lbl) in enumerate(flat_ds):
-            _, _, pcm = lkf_density_cls.plot(ds.density, ax=axes[idx], **kw)
+        for idx, (proxy, lbl) in enumerate(panels):
+            _, _, pcm = lkf_density_cls.plot(proxy, ax=axes[idx], **kw)
             axes[idx].set_title(lbl)
             pcms.append(pcm)
         fig.tight_layout()
