@@ -157,6 +157,25 @@ class lkf_dataset(object):
                 self.data['div'] = self.data['U']*np.nan
                 self.data['shr'] = self.data['U']*np.nan
                 self.data['vor'] = self.data['U']*np.nan
+                self._deformation_scale = 1.0
+            else:
+                # Detect units: sample the 99th percentile of total deformation
+                # over the first timestep.  Values well below 0.01 day^-1 are
+                # physically unrealistic for sea ice and indicate the field is
+                # stored in s^-1; multiply by 86400 to convert to day^-1.
+                eps_sample = np.array(np.sqrt(self.data.div[0]**2 +
+                                              self.data.shr[0]**2))
+                p99 = float(np.nanpercentile(eps_sample[eps_sample > 0], 99))
+                if p99 < 0.01:
+                    self._deformation_scale = 3600. * 24.
+                    logger.info('Pre-computed deformation rates appear to be in '
+                                's^-1 (99th pct = %.2e); converting to day^-1.',
+                                p99)
+                else:
+                    self._deformation_scale = 1.0
+                    logger.info('Pre-computed deformation rates appear to be in '
+                                'day^-1 (99th pct = %.2e); no conversion needed.',
+                                p99)
 
             # Initialize LKF and tracked LKF fields
             self.lkfs = np.empty((int(np.ceil(self.data.time.size/self.t_red))),dtype='object')
@@ -248,9 +267,9 @@ class lkf_dataset(object):
         
                 # Check if deformation rates are given
                 if self._has_deformation_rates:
-                    div = self.data.div[it+itr,1:-1,1:-1]
-                    shr = self.data.shr[it+itr,1:-1,1:-1]
-                    vor = self.data.vor[it+itr,1:-1,1:-1]
+                    div = self.data.div[it+itr,1:-1,1:-1] * self._deformation_scale
+                    shr = self.data.shr[it+itr,1:-1,1:-1] * self._deformation_scale
+                    vor = self.data.vor[it+itr,1:-1,1:-1] * self._deformation_scale
                 else:
                     dudx = ((uice[2:,:]-uice[:-2,:])/(self.dxu[:-2,:]+self.dxu[1:-1,:]))[:,1:-1]
                     dvdx = ((vice[2:,:]-vice[:-2,:])/(self.dxu[:-2,:]+self.dxu[1:-1,:]))[:,1:-1]
@@ -265,7 +284,12 @@ class lkf_dataset(object):
                     self.data.vor[it+itr,1:-1,1:-1] = vor
 
                 # Convert to numpy immediately to avoid xarray .where() overhead
-                eps_tot = np.array(np.sqrt(div**2+shr**2))
+                # When deformation rates are pre-computed they span the full grid;
+                # trim to the interior (matching the shape from the gradient path).
+                if self._has_deformation_rates:
+                    eps_tot = np.array(np.sqrt(div**2+shr**2))[1:-1, 1:-1]
+                else:
+                    eps_tot = np.array(np.sqrt(div**2+shr**2))
 
                 # Mask ice concentration and Arctic basin in one numpy pass
                 aice_np = np.array(aice[1:-1,1:-1])
