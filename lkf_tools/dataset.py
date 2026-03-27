@@ -569,6 +569,7 @@ class lkf_dataset(object):
             cached = self._load_stats('intersection')
             if cached is not None:
                 self.intersection = cached
+                self.intersection._lkf = self  # refresh stale back-reference
                 return self.intersection
         self._require_detection()
         if not hasattr(self, 'indm0'):
@@ -1032,7 +1033,6 @@ class lkf_collection:
         out[0] = np.asarray(arr, dtype=float)
         return out
 
-    @staticmethod
     def _elem_label(self, elem, i):
         """Return the display label for element *i*.
 
