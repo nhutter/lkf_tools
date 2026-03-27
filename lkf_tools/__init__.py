@@ -13,3 +13,4 @@ __version__ = 2.0
 __author__ = "Nils Hutter"
 __author_email__ = "nils.hutter@awi.de"
 
+from .dataset import lkf_dataset, lkf_collection, process_dataset

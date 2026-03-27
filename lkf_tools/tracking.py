@@ -23,38 +23,53 @@ from .detection import *
 
 # ------------------- 0. Helper Functions
 
-def compute_MHD_segment(A,B,return_overlap=False,overlap_thres=2,angle_thres=45,return_overlaping_area=False):
+def compute_MHD_segment(A,B,return_overlap=False,overlap_thres=2,angle_thres=45,
+                        return_overlaping_area=False,mask_instead=False):
     """ Function to compute Modified Hausdorff Distnce between two
     segments.
-    Following: Marie-Pierre Dubuisson and Anil K. Jain: A Modified 
+    Following: Marie-Pierre Dubuisson and Anil K. Jain: A Modified
                Hausdorff Distance for Object Matching, 1994
-    
-    Input : A,B                 - two segments
-            return_part_overlap - optinal: return number of pixels
+
+    Input : A,B                 - two segments (2, N_points) arrays
+            return_part_overlap - optional: return number of pixels
                                   that partly overlap between segments
             overlap_thres       - threshold what defines overlap
+            mask_instead        - if True and return_overlaping_area=True,
+                                  return boolean masks (N_A,) and (N_B,)
+                                  instead of sub-arrays of overlapping points
     Output: mhd, pixel_overlap(optional)"""
     daB = np.array([np.min(np.sqrt(np.sum((B.T-a)**2,axis=1))) for a in A.T])
     dbA = np.array([np.min(np.sqrt(np.sum((A.T-b)**2,axis=1))) for b in B.T])
-    
+
     if return_overlap:
         overlap = np.min([(daB <= overlap_thres).sum(),
                           (dbA <= overlap_thres).sum()])
         if overlap>1:
-            A_o = A[:,daB <= overlap_thres]
-            B_o = B[:,dbA <= overlap_thres]
+            mask_A = daB <= overlap_thres
+            mask_B = dbA <= overlap_thres
+            A_o = A[:,mask_A]
+            B_o = B[:,mask_B]
             # Filter two large angles
             angle = angle_segs(A_o[:,[0,-1]],B_o[:,[0,-1]])
             if angle > 90: angle = 180-angle
-            if angle >= angle_thres: overlap = 0
+            if angle >= angle_thres:
+                overlap = 0
+                mask_A = np.zeros(A.shape[1], dtype=bool)
+                mask_B = np.zeros(B.shape[1], dtype=bool)
             if return_overlaping_area:
-                return np.max([(daB.sum()/ A.shape[1]),(dbA.sum()/ B.shape[1])]), overlap, [A_o,B_o]
+                if mask_instead:
+                    return np.max([(daB.sum()/ A.shape[1]),(dbA.sum()/ B.shape[1])]), overlap, [mask_A,mask_B]
+                else:
+                    return np.max([(daB.sum()/ A.shape[1]),(dbA.sum()/ B.shape[1])]), overlap, [A_o,B_o]
             else:
                 return np.max([(daB.sum()/ A.shape[1]),(dbA.sum()/ B.shape[1])]), overlap
-        else: 
+        else:
             overlap = 0
             if return_overlaping_area:
-                return np.max([(daB.sum()/ A.shape[1]),(dbA.sum()/ B.shape[1])]), overlap, [np.array([]),np.array([])]
+                if mask_instead:
+                    return np.max([(daB.sum()/ A.shape[1]),(dbA.sum()/ B.shape[1])]), overlap, [np.zeros(A.shape[1],dtype=bool),np.zeros(B.shape[1],dtype=bool)]
+                else:
+                    return np.max([(daB.sum()/ A.shape[1]),(dbA.sum()/ B.shape[1])]), overlap, [np.array([]),np.array([])]
             else:
                 return np.max([(daB.sum()/ A.shape[1]),(dbA.sum()/ B.shape[1])]), overlap
 

@@ -332,3 +332,314 @@ def test_compute_deformation_method(detected_dataset):
 
     assert hasattr(ds, 'deformation'), "compute_deformation() must cache result on ds.deformation"
     assert deformation is ds.deformation
+
+
+# ---------------------------------------------------------------------------
+# Phase B batch 3: lkf_intersection
+# ---------------------------------------------------------------------------
+
+def test_lkf_intersection_angles_range(detected_dataset):
+    """All intersection angles must lie in [0, 90] degrees."""
+    from lkf_tools.stats import lkf_intersection
+    ds = detected_dataset
+    result = lkf_intersection(ds)
+
+    detected_ts = [t for t in range(len(ds.lkfs)) if ds.lkfs[t] is not None]
+    for t in detected_ts:
+        angles = result.lkf_interc[t]
+        if len(angles) == 0:
+            continue
+        arr = np.array(angles)
+        assert np.all(arr >= 0) and np.all(arr <= 90), (
+            f"timestep {t}: angles out of [0, 90]: min={arr.min():.2f} max={arr.max():.2f}"
+        )
+
+
+def test_lkf_intersection_pairs_valid(detected_dataset):
+    """Intersection pair indices must be valid segment indices."""
+    from lkf_tools.stats import lkf_intersection
+    ds = detected_dataset
+    result = lkf_intersection(ds)
+
+    detected_ts = [t for t in range(len(ds.lkfs)) if ds.lkfs[t] is not None]
+    for t in detected_ts:
+        n_segs = len(ds.lkfs[t])
+        for pair in result.lkf_interc_par[t]:
+            assert 0 <= pair[0] < n_segs, f"timestep {t}: invalid pair index {pair[0]}"
+            assert 0 <= pair[1] < n_segs, f"timestep {t}: invalid pair index {pair[1]}"
+            assert pair[0] < pair[1], f"timestep {t}: pairs must be ordered"
+
+
+def test_lkf_intersection_angle_pair_count(detected_dataset):
+    """Number of angles must equal number of pairs."""
+    from lkf_tools.stats import lkf_intersection
+    ds = detected_dataset
+    result = lkf_intersection(ds)
+
+    detected_ts = [t for t in range(len(ds.lkfs)) if ds.lkfs[t] is not None]
+    for t in detected_ts:
+        assert len(result.lkf_interc[t]) == len(result.lkf_interc_par[t]), (
+            f"timestep {t}: {len(result.lkf_interc[t])} angles but "
+            f"{len(result.lkf_interc_par[t])} pairs"
+        )
+
+
+def test_compute_intersection_method(detected_dataset):
+    """ds.compute_intersection() caches result on ds.intersection."""
+    ds = detected_dataset
+    inter = ds.compute_intersection()
+
+    assert hasattr(ds, 'intersection'), "compute_intersection() must cache on ds.intersection"
+    assert inter is ds.intersection
+
+
+# ---------------------------------------------------------------------------
+# Phase B batch 3: lkf_orientation
+# ---------------------------------------------------------------------------
+
+def test_lkf_orientation_shape(detected_dataset):
+    """lkf_orientation produces one angle per segment per timestep."""
+    from lkf_tools.stats import lkf_orientation
+    ds = detected_dataset
+    result = lkf_orientation(ds)
+
+    detected_ts = [t for t in range(len(ds.lkfs)) if ds.lkfs[t] is not None]
+    for t in detected_ts:
+        assert len(result.lkf_orientation[t]) == len(ds.lkfs[t]), (
+            f"timestep {t}: expected {len(ds.lkfs[t])} angles, "
+            f"got {len(result.lkf_orientation[t])}"
+        )
+
+
+def test_lkf_orientation_range(detected_dataset):
+    """All orientation angles must lie in (-90, 90] degrees."""
+    from lkf_tools.stats import lkf_orientation
+    ds = detected_dataset
+    result = lkf_orientation(ds)
+
+    detected_ts = [t for t in range(len(ds.lkfs)) if ds.lkfs[t] is not None]
+    for t in detected_ts:
+        arr = result.lkf_orientation[t]
+        assert np.all(arr > -90) and np.all(arr <= 90), (
+            f"timestep {t}: angles out of (-90, 90]: min={arr.min():.2f} max={arr.max():.2f}"
+        )
+
+
+def test_lkf_orientation_values(detected_dataset):
+    """Orientation angles must match manual lkf_poly_fit_p calculation."""
+    from lkf_tools.stats import lkf_orientation, lkf_poly_fit_p
+    ds = detected_dataset
+    result = lkf_orientation(ds)
+
+    detected_ts = [t for t in range(len(ds.lkfs)) if ds.lkfs[t] is not None]
+    t = detected_ts[0]
+    for i, seg in enumerate(ds.lkfs[t]):
+        p_x, p_y = lkf_poly_fit_p(seg[ds.indm0, :], seg[ds.indm1, :], 1)
+        p = p_y[0] / p_x[0]
+        expected = 90. if np.isnan(p) else np.arctan(p) / np.pi * 180.
+        np.testing.assert_allclose(result.lkf_orientation[t][i], expected, rtol=1e-10,
+                                   err_msg=f"Orientation mismatch segment {i} timestep {t}")
+
+
+def test_compute_orientation_method(detected_dataset):
+    """ds.compute_orientation() caches result on ds.orientation."""
+    ds = detected_dataset
+    orient = ds.compute_orientation()
+
+    assert hasattr(ds, 'orientation'), "compute_orientation() must cache on ds.orientation"
+    assert orient is ds.orientation
+
+
+# ---------------------------------------------------------------------------
+# Phase B batch 4: lkf_lifetime + lkf_growthrate
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def tracked_dataset(tmp_path_factory):
+    """Detect 3 timesteps and run tracking on 2 pairs; return the dataset."""
+    import sys
+    sys.path.insert(0, str(REPO_ROOT))
+    from lkf_tools.dataset import process_dataset
+
+    out_dir = tmp_path_factory.mktemp("lkfs_tracked")
+    ds = process_dataset(str(NETCDF_FILE), output_path=str(out_dir) + "/")
+    ds.detect_lkfs(indexes=[0, 1, 2])
+    ds.track_lkfs(indexes=[0, 1])
+    return ds
+
+
+def test_lkf_lifetime_shape(tracked_dataset):
+    """lkf_lifetime has one entry per timestep; each entry length == n_segments."""
+    from lkf_tools.stats import lkf_lifetime
+    ds = tracked_dataset
+    result = lkf_lifetime(ds)
+
+    for t in range(len(ds.lkfs)):
+        if ds.lkfs[t] is None:
+            continue
+        assert len(result.lkf_lifetime[t]) == len(ds.lkfs[t]), (
+            f"timestep {t}: expected {len(ds.lkfs[t])} lifetimes, "
+            f"got {len(result.lkf_lifetime[t])}"
+        )
+
+
+def test_lkf_lifetime_min(tracked_dataset):
+    """Every lifetime must be >= 1."""
+    from lkf_tools.stats import lkf_lifetime
+    ds = tracked_dataset
+    result = lkf_lifetime(ds)
+
+    for t in range(len(ds.lkfs)):
+        if ds.lkfs[t] is None:
+            continue
+        assert np.all(result.lkf_lifetime[t] >= 1), (
+            f"timestep {t}: lifetime < 1 found"
+        )
+
+
+def test_lkf_lifetime_tracked_segments(tracked_dataset):
+    """After tracking, at least one segment should have lifetime > 1."""
+    from lkf_tools.stats import lkf_lifetime
+    ds = tracked_dataset
+    result = lkf_lifetime(ds)
+
+    # Timestep 1 and 2 may have tracked segments
+    any_tracked = False
+    for t in range(1, len(ds.lkfs)):
+        if ds.lkfs[t] is not None and np.any(result.lkf_lifetime[t] > 1):
+            any_tracked = True
+            break
+    assert any_tracked, "Expected at least one segment with lifetime > 1 after tracking"
+
+
+def test_compute_lifetime_method(tracked_dataset):
+    """ds.compute_lifetime() returns and caches result on ds.lifetime."""
+    ds = tracked_dataset
+    result = ds.compute_lifetime()
+
+    assert hasattr(ds, 'lifetime'), "compute_lifetime() must cache on ds.lifetime"
+    assert result is ds.lifetime
+
+
+def test_lkf_growthrate_shape(tracked_dataset):
+    """lkf_growth and lkf_shrink have one entry per timestep; each length == n_segments."""
+    from lkf_tools.stats import lkf_growthrate
+    ds = tracked_dataset
+    if not hasattr(ds, 'lifetime'):
+        ds.compute_lifetime()
+    if not hasattr(ds, 'lengths'):
+        ds.compute_lengths()
+    result = lkf_growthrate(ds)
+
+    for t in range(len(ds.lkfs)):
+        if ds.lkfs[t] is None:
+            continue
+        assert len(result.lkf_growth[t]) == len(ds.lkfs[t]), (
+            f"timestep {t}: growth length {len(result.lkf_growth[t])} != n_segs {len(ds.lkfs[t])}"
+        )
+        assert len(result.lkf_shrink[t]) == len(ds.lkfs[t]), (
+            f"timestep {t}: shrink length {len(result.lkf_shrink[t])} != n_segs {len(ds.lkfs[t])}"
+        )
+
+
+def test_lkf_growthrate_nonneg(tracked_dataset):
+    """Non-NaN growth/shrink values must be >= 0."""
+    from lkf_tools.stats import lkf_growthrate
+    ds = tracked_dataset
+    result = lkf_growthrate(ds)
+
+    for t in range(len(ds.lkfs)):
+        if ds.lkfs[t] is None:
+            continue
+        g = result.lkf_growth[t]
+        s = result.lkf_shrink[t]
+        assert np.all(g[~np.isnan(g)] >= 0), f"timestep {t}: negative growth found"
+        assert np.all(s[~np.isnan(s)] >= 0), f"timestep {t}: negative shrink found"
+
+
+def test_compute_growthrate_method(tracked_dataset):
+    """ds.compute_growthrate() returns and caches result on ds.growthrate."""
+    ds = tracked_dataset
+    result = ds.compute_growthrate()
+
+    assert hasattr(ds, 'growthrate'), "compute_growthrate() must cache on ds.growthrate"
+    assert result is ds.growthrate
+
+
+# ---------------------------------------------------------------------------
+# Phase D: lkf_collection
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def two_datasets(tmp_path_factory):
+    """Two lkf_dataset instances each detecting one timestep (different indices)."""
+    import sys
+    sys.path.insert(0, str(REPO_ROOT))
+    from lkf_tools.dataset import process_dataset
+
+    out_a = tmp_path_factory.mktemp("lkfs_col_a")
+    ds_a = process_dataset(str(NETCDF_FILE), output_path=str(out_a) + "/")
+    ds_a.detect_lkfs(indexes=[0])
+
+    out_b = tmp_path_factory.mktemp("lkfs_col_b")
+    ds_b = process_dataset(str(NETCDF_FILE), output_path=str(out_b) + "/")
+    ds_b.detect_lkfs(indexes=[1])
+
+    return ds_a, ds_b
+
+
+def test_collection_construct(two_datasets):
+    """lkf_collection accepts a list of lkf_dataset instances."""
+    from lkf_tools.dataset import lkf_collection
+    ds_a, ds_b = two_datasets
+    col = lkf_collection([ds_a, ds_b])
+    assert len(col.datasets) == 2
+
+
+def test_collection_compute_lengths(two_datasets):
+    """compute_lengths() on collection caches result on each dataset."""
+    from lkf_tools.dataset import lkf_collection
+    ds_a, ds_b = two_datasets
+    col = lkf_collection([ds_a, ds_b])
+    col.compute_lengths()
+    assert hasattr(ds_a, 'lengths'), "lengths not cached on ds_a"
+    assert hasattr(ds_b, 'lengths'), "lengths not cached on ds_b"
+
+
+def test_collection_lkf_length_flat(two_datasets):
+    """col.lkf_length matches manual concatenation from both datasets."""
+    from lkf_tools.dataset import lkf_collection
+    ds_a, ds_b = two_datasets
+    col = lkf_collection([ds_a, ds_b])
+    col.compute_lengths()
+
+    manual = []
+    for ds in [ds_a, ds_b]:
+        for t in range(len(ds.lkfs)):
+            if ds.lkfs[t] is not None:
+                manual.append(ds.lengths.lkf_length[t])
+    manual = np.concatenate(manual)
+
+    np.testing.assert_array_equal(col.lkf_length, manual)
+
+
+def test_collection_compute_density(two_datasets):
+    """compute_density() on collection caches density on each dataset."""
+    from lkf_tools.dataset import lkf_collection
+    ds_a, ds_b = two_datasets
+    col = lkf_collection([ds_a, ds_b])
+    col.compute_density()
+    assert hasattr(ds_a, 'density'), "density not cached on ds_a"
+    assert hasattr(ds_b, 'density'), "density not cached on ds_b"
+
+
+def test_collection_lkf_length_count(two_datasets):
+    """Total segment count from collection equals sum of individual detected segments."""
+    from lkf_tools.dataset import lkf_collection
+    ds_a, ds_b = two_datasets
+    col = lkf_collection([ds_a, ds_b])
+    col.compute_lengths()
+
+    n_a = sum(len(ds_a.lkfs[t]) for t in range(len(ds_a.lkfs)) if ds_a.lkfs[t] is not None)
+    n_b = sum(len(ds_b.lkfs[t]) for t in range(len(ds_b.lkfs)) if ds_b.lkfs[t] is not None)
+    assert len(col.lkf_length) == n_a + n_b
