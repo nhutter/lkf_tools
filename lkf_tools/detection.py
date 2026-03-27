@@ -257,7 +257,8 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
             num_points = np.sum(np.all(~np.isnan(seg_active),axis=1),axis=-1)
             # Limit points for the computation of the angle to threshold
             num_points[num_points>angle_point_thres] = angle_point_thres
-            dx = (seg_active[:,:,-1]-seg_active[np.arange(seg_active.shape[0]),:,-num_points])/np.stack([num_points-1,num_points-1],axis=1) - (seg_append-seg_active[:,:,-1])
+            with np.errstate(invalid='ignore', divide='ignore'):
+                dx = (seg_active[:,:,-1]-seg_active[np.arange(seg_active.shape[0]),:,-num_points])/np.stack([num_points-1,num_points-1],axis=1) - (seg_append-seg_active[:,:,-1])
             new_starts = seg_append[np.sum(np.abs(dx),axis=1)>1] # high angle -> new starting point
             #print 'Number of segments broken by angel: %i' %np.sum(np.sum(np.abs(dx),axis=1)>1)
 
@@ -478,7 +479,7 @@ def detect_segments(lkf_thin,eps_thres=0.1,max_ind=500):
             num_new_starts = new_starts.shape[0]
             seg_old_shape = seg.shape[0]
             # Fill up seg with NaNs for new starts
-            seg = np.append(seg,np.empty((num_new_starts,2,seg.shape[-1]))*np.nan,axis=0)
+            seg = np.append(seg,np.full((num_new_starts,2,seg.shape[-1]),np.nan),axis=0)
             # Fill in new start values 
             seg[seg_old_shape:,:,-1] = new_starts
 
@@ -567,11 +568,14 @@ def angle_segs(seg_I,seg_II):
     Output: angle - angle between segments"""
 
     # Determine directions of segments
-    e1 = (seg_I[:,0]-seg_I[:,1])
-    e1 = (e1/np.sqrt(np.sum(e1**2))) # Normalize basis vector
+    # errstate: zero-length segments produce NaN direction vectors, which is
+    # handled correctly downstream (NaN angle fails the threshold check).
+    with np.errstate(invalid='ignore', divide='ignore'):
+        e1 = (seg_I[:,0]-seg_I[:,1])
+        e1 = (e1/np.sqrt(np.sum(e1**2))) # Normalize basis vector
 
-    f1 = (seg_II[:,0]-seg_II[:,1])
-    f1 = (f1/np.sqrt(np.sum(f1**2))) # Normalize basis vector
+        f1 = (seg_II[:,0]-seg_II[:,1])
+        f1 = (f1/np.sqrt(np.sum(f1**2))) # Normalize basis vector
 
     # Determine angle between both directions
     # Clip to [-1, 1] to guard against floating-point rounding outside the
