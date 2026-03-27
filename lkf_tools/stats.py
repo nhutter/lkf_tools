@@ -1180,6 +1180,7 @@ class lkf_intersection:
 
     def __init__(self, lkf, num_p=10, dis_par=1, use_vorticity=True):
         self.use_vorticity = use_vorticity
+        self._lkf = lkf  # back-reference used by plot(lifetime=<int>)
         indd2 = getattr(lkf, 'indd2', None)
         if hasattr(lkf, 'lkf_dataset'):
             lkf_interc = []
@@ -1244,9 +1245,11 @@ class lkf_intersection:
             Number of histogram bins.  Default 18 (5° bins for 90°; 10° for 180°).
         color0, color1 : str, optional
             Bar colours for type 0 and type 1 respectively.
-        lifetime : lkf_lifetime, optional
+        lifetime : int or None, optional
             When provided, restrict the histogram to intersection pairs where
-            **both** segments have ``lifetime == 1`` (newly formed LKFs only).
+            **both** segments have the given lifetime value (e.g. ``lifetime=1``
+            for newly formed LKFs only).  Requires that ``compute_lifetime()``
+            has been called on the parent dataset.
         intersection_type : {'both', 'opp', 'same'}, optional
             Which intersection types to include (only effective when
             ``use_vorticity=True``).  ``'opp'`` shows only Type 0 (opposite
@@ -1270,8 +1273,21 @@ class lkf_intersection:
         if use_vorticity and hasattr(self, 'lkf_interc_type'):
             all_type = _flatten_obj(self.lkf_interc_type)
 
-        # Optionally filter to newly-formed pairs (both segments lifetime == 1)
+        # Optionally filter to pairs where both segments have a given lifetime.
+        # ``lifetime`` may be:
+        #   - an int/float : filter value; lifetime arrays come from self._lkf
+        #   - a lkf_lifetime instance (legacy): use it directly, filter value == 1
         if lifetime is not None and hasattr(self, 'lkf_interc_par'):
+            if isinstance(lifetime, (int, float, np.integer, np.floating)):
+                lt_val = int(lifetime)
+                lt_obj = getattr(getattr(self, '_lkf', None), 'lifetime', None)
+                if lt_obj is None:
+                    raise RuntimeError(
+                        "lifetime filter requires compute_lifetime() to have been called first.")
+            else:
+                # Legacy: caller passes a lkf_lifetime object directly
+                lt_obj = lifetime
+                lt_val = 1
             filtered_ang = []
             filtered_type = []
             for t in range(len(self.lkf_interc)):
@@ -1279,15 +1295,15 @@ class lkf_intersection:
                     continue
                 angles = self.lkf_interc[t]
                 pairs  = self.lkf_interc_par[t]
-                lts    = lifetime.lkf_lifetime[t] if t < len(lifetime.lkf_lifetime) else np.array([])
+                lts    = lt_obj.lkf_lifetime[t] if t < len(lt_obj.lkf_lifetime) else np.array([])
                 ty_t   = (self.lkf_interc_type[t]
                           if (use_vorticity and hasattr(self, 'lkf_interc_type')
                               and t < len(self.lkf_interc_type))
                           else [])
                 for k, (ang, pair) in enumerate(zip(angles, pairs)):
-                    i_lt = lts[pair[0]] if pair[0] < len(lts) else np.nan
-                    j_lt = lts[pair[1]] if pair[1] < len(lts) else np.nan
-                    if i_lt == 1 and j_lt == 1:
+                    i_lt = lts[int(pair[0])] if int(pair[0]) < len(lts) else np.nan
+                    j_lt = lts[int(pair[1])] if int(pair[1]) < len(lts) else np.nan
+                    if i_lt == lt_val and j_lt == lt_val:
                         filtered_ang.append(ang)
                         if use_vorticity and k < len(ty_t):
                             filtered_type.append(ty_t[k])

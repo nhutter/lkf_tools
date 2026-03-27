@@ -574,8 +574,10 @@ def angle_segs(seg_I,seg_II):
     f1 = (f1/np.sqrt(np.sum(f1**2))) # Normalize basis vector
 
     # Determine angle between both directions
+    # Clip to [-1, 1] to guard against floating-point rounding outside the
+    # valid arccos domain (would otherwise produce a RuntimeWarning + NaN).
     angle = np.dot(e1,-f1)
-    angle = np.arccos(angle)/np.pi*180
+    angle = np.arccos(np.clip(angle, -1.0, 1.0))/np.pi*180
 
     return angle
 

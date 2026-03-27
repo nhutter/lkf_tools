@@ -30,7 +30,7 @@ print("Initialising lkf_dataset …")
 lkf_data = process_dataset(str(NETCDF_FILE), output_path=str(OUTPUT_PATH) + "/")
 
 print("Detecting LKFs for timesteps 0 and 1 …")
-lkf_data.detect_lkfs(indexes=[0, 1])
+lkf_data.detect_lkfs(indexes=[0, 1], force_redetect=True)
 
 print("Tracking LKFs for pair 0 -> 1 …")
 lkf_data.track_lkfs(indexes=[0], force_recompute=True)
@@ -45,8 +45,8 @@ lkfs_1 = np.load(
     lkf_data.lkfpath / f"lkf_{stem}_002.npy", allow_pickle=True
 )
 
-track_file = list(lkf_data.track_output_path.glob("lkf_tracked_pairs_*.npy"))
-assert len(track_file) == 1, f"Expected exactly one tracked-pairs file, got {track_file}"
+track_file = list(lkf_data.track_output_path.glob(f"lkf_tracked_pairs_{stem}_001_to_{stem}_002.npy"))
+assert len(track_file) == 1, f"Expected exactly one tracked-pairs file 001→002, got {track_file}"
 tracked_pairs = np.load(track_file[0], allow_pickle=True)
 
 # Timestamps for the two detected steps
