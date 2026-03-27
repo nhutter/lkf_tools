@@ -744,8 +744,6 @@ class lkf_density:
             ax.set_aspect('equal')
             ax.set_title('Mean LKF density')
 
-        cb = fig.colorbar(pcm, ax=ax, shrink=0.8)
-        cb.set_label('LKF points per 100 km² per timestep')
         fig.tight_layout()
         return fig, ax, pcm
 
@@ -1156,6 +1154,7 @@ class lkf_intersection:
                                                       indm0, indm1, intcp, num_p,
                                                       is_legacy, _indd2)
                 if use_vorticity and vor0 is not None and vor1 is not None:
+                    pair_arr = np.array([iseg, pari])
                     if vor0 > 0 and vor1 < 0:
                         if ang_ii < ang_i:
                             ang_ii += 180
@@ -1170,7 +1169,7 @@ class lkf_intersection:
                         intc_ang.extend([abs(ang_ii - ang_i),
                                          180 - abs(ang_ii - ang_i)])
                         intc_type.extend([1, 1])
-                    intc_par.append(np.array([iseg, pari]))
+                    intc_par.extend([pair_arr, pair_arr])
                 else:
                     angdiff = abs(ang_ii - ang_i)
                     if angdiff > 90:
@@ -1179,7 +1178,7 @@ class lkf_intersection:
                     intc_par.append(np.array([iseg, pari]))
         return intc_ang, intc_par, intc_type
 
-    def __init__(self, lkf, num_p=10, dis_par=1, use_vorticity=False):
+    def __init__(self, lkf, num_p=10, dis_par=1, use_vorticity=True):
         self.use_vorticity = use_vorticity
         indd2 = getattr(lkf, 'indd2', None)
         if hasattr(lkf, 'lkf_dataset'):
@@ -1222,7 +1221,7 @@ class lkf_intersection:
             if use_vorticity:
                 self.lkf_interc_type = np.array(lkf_interc_type, dtype=object)
 
-    def plot(self, ax=None, bins=18, color0='C0', color1='C1'):
+    def plot(self, ax=None, bins=18, color0='C0', color1='C1', lifetime=None):
         """Plot a histogram of LKF intersection angles.
 
         Without vorticity (``use_vorticity=False``) angles are folded into
@@ -1244,12 +1243,42 @@ class lkf_intersection:
             Number of histogram bins.  Default 18 (5° bins for 90°; 10° for 180°).
         color0, color1 : str, optional
             Bar colours for type 0 and type 1 respectively.
+        lifetime : lkf_lifetime, optional
+            When provided, restrict the histogram to intersection pairs where
+            **both** segments have ``lifetime == 1`` (newly formed LKFs only).
 
         Returns
         -------
         fig, ax : Figure and Axes objects.
         """
         all_ang = _flatten_obj(self.lkf_interc)
+        all_type = None
+
+        # Optionally filter to newly-formed pairs (both segments lifetime == 1)
+        if lifetime is not None and hasattr(self, 'lkf_interc_par'):
+            uv = getattr(self, 'use_vorticity', False)
+            filtered_ang = []
+            filtered_type = []
+            for t in range(len(self.lkf_interc)):
+                if t >= len(self.lkf_interc_par):
+                    continue
+                angles = self.lkf_interc[t]
+                pairs  = self.lkf_interc_par[t]
+                lts    = lifetime.lkf_lifetime[t] if t < len(lifetime.lkf_lifetime) else np.array([])
+                ty_t   = (self.lkf_interc_type[t]
+                          if (uv and hasattr(self, 'lkf_interc_type')
+                              and t < len(self.lkf_interc_type))
+                          else [])
+                for k, (ang, pair) in enumerate(zip(angles, pairs)):
+                    i_lt = lts[pair[0]] if pair[0] < len(lts) else np.nan
+                    j_lt = lts[pair[1]] if pair[1] < len(lts) else np.nan
+                    if i_lt == 1 and j_lt == 1:
+                        filtered_ang.append(ang)
+                        if uv and k < len(ty_t):
+                            filtered_type.append(ty_t[k])
+            all_ang = np.array(filtered_ang)
+            if uv and filtered_type:
+                all_type = np.array(filtered_type)
 
         if ax is None:
             fig, ax = plt.subplots(figsize=(5, 4))
@@ -1259,7 +1288,9 @@ class lkf_intersection:
         use_vorticity = getattr(self, 'use_vorticity', False)
 
         if use_vorticity and hasattr(self, 'lkf_interc_type'):
-            all_type = _flatten_obj(self.lkf_interc_type)
+            # Use pre-filtered all_type if available (from lifetime filter), else flatten
+            if all_type is None:
+                all_type = _flatten_obj(self.lkf_interc_type)
             ang_range = (0, 180)
             bin_edges = np.linspace(0, 180, bins + 1)
             ang0 = all_ang[all_type == 0]

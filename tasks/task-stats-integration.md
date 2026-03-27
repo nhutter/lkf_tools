@@ -121,6 +121,35 @@ https://doi.org/10.1029/2021jc017666 or https://doi.org/10.5194/tc-14-93-2020
 
 ---
 
+## Phase G - Small changes
+- [ ] **Step 6a - Repeats of `lkf_data.detect_lkfs`**: Check if `force_redetect=False` option surpresses
+  repeated detection if detection was done before with saved output.
+- [ ] **Step 6b - Implement `tqdm` progress bar**: Use `tqdm` isntead of printed progress statements
+  in `lkf_dataset.detect_lkfs` (`Compute deformation rates and detect features for day *`); Implement
+  progress bar for `lkf_dataset.track_lkfs` and all slow methods in `stats.py`. 
+- [ ] **Step 6c - Solve index error in `detect_lkfs`**: Work on `task_bugfix-lkfs-index.md`.
+- [ ] **Step 6d - Custom masks in `lkf_dataset`**: Implement optional input option for `lkf_dataset.mask`;
+  check correct shape of input mask, if not raise warning and use current mask as default.
+- [ ] **Step 6e - Double colorbar in `lkf_density.plot()`**: Remove second colorbar.
+- [ ] **Step 6f - Default of `lkf_intersection`**: Change to `use_vorticity=True`.
+- [ ] **Step 6g - Filter option in `lkf_intersection.plot()`**: Implement filter option to plot only newly
+  formed LKFs (`lifetime==1`).
+- [ ] **Step 6h - Store output of `stats.py` methods**: Save and reload the output all stats methods with 
+  `compute` function; Implement a `force_recompute` option.
+- [ ] **Step 6i - `stats.py` method without detected lkfs: Check if lkfs were detected or tracked before
+  applying the 
+- [ ] **Step 6i - Save date stamp in `lkf_dataset.detect_lkfs`**: Store a timestamp of the date with the
+  LKF when saving it; add timestamp as additional column to the LKF
+- [ ] **Step 6j - Comparative plotting for `lkf_collection`**: Implement `plot_type = ['flatten','compare']`
+  option to either `flatten` the LKF property of all `lkf_datasets` and plot them as one dataset, or to 
+  plot the LKF property of all `lkf_datasets` separately in the same figure to copmare.
+- [ ] **Step 6k - Nested use of `lkf_collection`**: Implemented option to use `lkf_collection` instead of 
+  `lkf_dataset` in the `lkf_collection.__init__()`. The option should allow to have a collection over 
+  multiple years nested in a collection of different model. With options like `flatten` by year and `compare`
+  for different models. Test this option with the `IFREMER` data in `tutorial_gen_dataset`.
+
+---
+
 ## Definition of done
 - All stat methods from `legacy_code/lkf_stats_tools.py` accessible via `lkf_dataset` instances  ✓
 - `lkf_collection` covers multi-year aggregation  ✓

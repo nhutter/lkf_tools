@@ -22,6 +22,12 @@ from pathlib import Path
 import pickle
 from loguru import logger
 
+try:
+    from tqdm import tqdm as _tqdm
+except ImportError:
+    def _tqdm(iterable, **kwargs):
+        return iterable
+
 import xarray as xr
 
 from .detection import *
@@ -38,7 +44,8 @@ class lkf_dataset(object):
     def __init__(self,netcdf_file,output_path='./',xarray=None,
                  max_kernel=5,min_kernel=1, dog_thres=0.01,skeleton_kernel=0,
                  dis_thres=4,ellp_fac=2,angle_thres=45,eps_thres=1.25,lmin=3,
-                 latlon=True,return_eps=True,use_eps=True,red_fac=1,t_red=3):
+                 latlon=True,return_eps=True,use_eps=True,red_fac=1,t_red=3,
+                 mask=None, label=None):
         """
         Processes deformation and drift dataset to LKF data set
 
@@ -62,6 +69,8 @@ class lkf_dataset(object):
             else:
                 logger.warning('Existing pickle does not fit to lkf_dataset class! %s' %cls.pickle_path)
         
+        self.label = label
+
         if not self._initialized:
             logger.info('Creating new lkf_dataset from input data')
             lkfpath = '/'
@@ -125,6 +134,17 @@ class lkf_dataset(object):
             self.mask = ((((self.lon > -120) & (self.lon < 100)) & (self.lat >= 80)) |
                     ((self.lon <= -120) & (self.lat >= 70)) |
                     ((self.lon >= 100) & (self.lat >= 70)))
+
+            # Apply custom mask if provided (must match grid shape)
+            if mask is not None:
+                custom = np.asarray(mask)
+                if custom.shape != np.asarray(self.mask).shape:
+                    warnings.warn(
+                        f"Custom mask shape {custom.shape} does not match grid shape "
+                        f"{np.asarray(self.mask).shape}; using default Arctic basin mask.")
+                else:
+                    self.mask = custom
+
             self.index_x = np.where(np.sum(self.mask[1:-1,1:-1],axis=0)>0)
             self.index_y = np.where(np.sum(self.mask[1:-1,1:-1],axis=1)>0)
 
@@ -145,12 +165,29 @@ class lkf_dataset(object):
                                          dtype='object')
             self.data['lkfs'] = self.data['U']*np.nan
             self.data['tracked_lkfs'] = self.data['U']*np.nan
+            self.timestep_dates = {}
 
 
     def save(self):
         with open(self.pickle_path, 'wb') as output_pkl:
             logger.info('Writing lkf_data to pickle file: %s' %self.pickle_path)
             pickle.dump(self, output_pkl, pickle.HIGHEST_PROTOCOL)
+
+    # ── stats cache helpers ───────────────────────────────────────────────────
+
+    def _stats_cache_path(self, name):
+        return self.lkfpath / f'stats_{name}.pkl'
+
+    def _load_stats(self, name):
+        p = self._stats_cache_path(name)
+        if p.exists():
+            with open(p, 'rb') as f:
+                return pickle.load(f)
+        return None
+
+    def _save_stats(self, name, obj):
+        with open(self._stats_cache_path(name), 'wb') as f:
+            pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
     
     def detect_lkfs(self,indexes=None,force_redetect=False):
         """
@@ -159,23 +196,22 @@ class lkf_dataset(object):
         :param indexes: time indexes that should be detected. If None all time steps are detected
         """
         
-        # Check for already dectected features
-        if force_redetect:
+        # Check for already detected features; skip them unless force_redetect=True
+        if not force_redetect and os.path.exists(self.lkfpath):
             self.lkf_filelist = [i for i in os.listdir(self.lkfpath) if i.startswith('lkf') and i.endswith('.npy')]
             self.lkf_filelist.sort()
             self.ind_detect = [int(i.split('.')[0].split('_')[-1]) for i in self.lkf_filelist]
         else:
             self.ind_detect = []
-            
+
         if indexes is None:
             self.indexes = np.arange(self.time.size/self.t_red)
         else:
             self.indexes = indexes
-        
-        for it in [int(j) for j in self.indexes if j+1 not in self.ind_detect]:
-            
-            print("Compute deformation rates and detect features for day %i" %(it+1))
-        
+
+        pending = [int(j) for j in self.indexes if j+1 not in self.ind_detect]
+        for it in _tqdm(pending, desc='Detecting LKFs', unit='step', leave=True):
+
             self.eps_tot_list = []
 
             for itr in range(self.t_red):
@@ -227,7 +263,6 @@ class lkf_dataset(object):
             self.corfac = 12.5e3/np.mean([np.nanmean(self.dxu),np.nanmean(self.dyu)])/float(self.red_fac)
 
             # Detect features
-            print('Start detection routines')
             lkf = lkf_detect_eps_multday(self.eps_tot_list,max_kernel=self.max_kernel*(1+self.corfac)*0.5,
                                          min_kernel=self.min_kernel*(1+self.corfac)*0.5,
                                          dog_thres=self.dog_thres,dis_thres=self.dis_thres*self.corfac,
@@ -271,6 +306,9 @@ class lkf_dataset(object):
             # Store lkf in object
             self.lkfs[it] = lkf
             self.timesteps_detected[it] = True
+            if not hasattr(self, 'timestep_dates'):
+                self.timestep_dates = {}
+            self.timestep_dates[it] = self.time.values[it]
 
             # Store lkf in xarray (bulk write via underlying numpy array)
             lkfs_np = self.data.lkfs.values
@@ -323,11 +361,16 @@ class lkf_dataset(object):
                 new_segs.append(np.concatenate([seg, np.stack([x, y])], axis=0))
             self.lkfs[t] = new_segs
 
-    def compute_lengths(self):
+    def compute_lengths(self, force_recompute=False):
         """Compute arc-length of every LKF segment and cache on ``self.lengths``.
 
         Calls :meth:`compute_projected_coords` automatically if projected
         coordinates have not yet been appended.
+
+        Parameters
+        ----------
+        force_recompute : bool, optional
+            Re-run the computation even if a cached result exists.  Default ``False``.
 
         Returns
         -------
@@ -335,13 +378,21 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_lengths` instance (also stored as
             ``self.lengths``).
         """
+        if not force_recompute and 'lengths' in self.__dict__ and self.__dict__['lengths'] is not None:
+            return self.lengths
+        if not force_recompute:
+            cached = self._load_stats('lengths')
+            if cached is not None:
+                self.lengths = cached
+                return self.lengths
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_lengths
         self.lengths = lkf_lengths(self)
+        self._save_stats('lengths', self.lengths)
         return self.lengths
 
-    def compute_density(self, grid_res=50e3):
+    def compute_density(self, grid_res=50e3, force_recompute=False):
         """Bin LKF points into a 2-D spatial density grid and cache on ``self.density``.
 
         Calls :meth:`compute_projected_coords` automatically if projected
@@ -351,6 +402,8 @@ class lkf_dataset(object):
         ----------
         grid_res : float, optional
             Grid cell size in metres.  Default is 50 km.
+        force_recompute : bool, optional
+            Re-run the computation even if a cached result exists.  Default ``False``.
 
         Returns
         -------
@@ -358,16 +411,29 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_density` instance (also stored as
             ``self.density``).
         """
+        if not force_recompute and 'density' in self.__dict__ and self.__dict__['density'] is not None:
+            return self.density
+        if not force_recompute:
+            cached = self._load_stats('density')
+            if cached is not None:
+                self.density = cached
+                return self.density
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_density
         self.density = lkf_density(self, res=grid_res)
+        self._save_stats('density', self.density)
         return self.density
 
-    def compute_curvature(self):
+    def compute_curvature(self, force_recompute=False):
         """Compute end-to-end distance of every LKF segment and cache on ``self.curvature``.
 
         Calls :meth:`compute_projected_coords` automatically if needed.
+
+        Parameters
+        ----------
+        force_recompute : bool, optional
+            Re-run the computation even if a cached result exists.  Default ``False``.
 
         Returns
         -------
@@ -375,16 +441,29 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_curvature` instance (also stored
             as ``self.curvature``).
         """
+        if not force_recompute and 'curvature' in self.__dict__ and self.__dict__['curvature'] is not None:
+            return self.curvature
+        if not force_recompute:
+            cached = self._load_stats('curvature')
+            if cached is not None:
+                self.curvature = cached
+                return self.curvature
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_curvature
         self.curvature = lkf_curvature(self)
+        self._save_stats('curvature', self.curvature)
         return self.curvature
 
-    def compute_deformation(self):
+    def compute_deformation(self, force_recompute=False):
         """Compute mean divergence and shear per segment and cache on ``self.deformation``.
 
         Calls :meth:`compute_projected_coords` automatically if needed.
+
+        Parameters
+        ----------
+        force_recompute : bool, optional
+            Re-run the computation even if a cached result exists.  Default ``False``.
 
         Returns
         -------
@@ -392,13 +471,22 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_deformation` instance (also stored
             as ``self.deformation``).
         """
+        if not force_recompute and 'deformation' in self.__dict__ and self.__dict__['deformation'] is not None:
+            return self.deformation
+        if not force_recompute:
+            cached = self._load_stats('deformation')
+            if cached is not None:
+                self.deformation = cached
+                return self.deformation
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_deformation
         self.deformation = lkf_deformation(self)
+        self._save_stats('deformation', self.deformation)
         return self.deformation
 
-    def compute_intersection(self, num_p=10, dis_par=1, use_vorticity=False):
+    def compute_intersection(self, num_p=10, dis_par=1, use_vorticity=True,
+                             force_recompute=False):
         """Find intersecting LKF pairs and compute crossing angles; cache on ``self.intersection``.
 
         Calls :meth:`compute_projected_coords` automatically if needed.
@@ -410,43 +498,71 @@ class lkf_dataset(object):
         dis_par : int, optional
             Search radius in grid cells for neighbour detection (default 1).
         use_vorticity : bool, optional
-            If ``True``, use per-segment vorticity sign to distinguish
+            If ``True`` (default), use per-segment vorticity sign to distinguish
             intersection types and produce angles in [0, 180] degrees.
-            Default is ``False`` (angles folded into [0, 90]).
+            ``False`` folds angles into [0, 90].
+        force_recompute : bool, optional
+            Re-run the computation even if a cached result exists.  Default ``False``.
 
         Returns
         -------
         lkf_intersection
             The :class:`lkf_tools.stats.lkf_intersection` instance.
         """
+        if not force_recompute and 'intersection' in self.__dict__ and self.__dict__['intersection'] is not None:
+            return self.intersection
+        if not force_recompute:
+            cached = self._load_stats('intersection')
+            if cached is not None:
+                self.intersection = cached
+                return self.intersection
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_intersection
         self.intersection = lkf_intersection(self, num_p=num_p, dis_par=dis_par,
                                              use_vorticity=use_vorticity)
+        self._save_stats('intersection', self.intersection)
         return self.intersection
 
-    def compute_orientation(self):
+    def compute_orientation(self, force_recompute=False):
         """Compute per-segment orientation angle and cache on ``self.orientation``.
 
         Calls :meth:`compute_projected_coords` automatically if needed.
+
+        Parameters
+        ----------
+        force_recompute : bool, optional
+            Re-run the computation even if a cached result exists.  Default ``False``.
 
         Returns
         -------
         lkf_orientation
             The :class:`lkf_tools.stats.lkf_orientation` instance.
         """
+        if not force_recompute and 'orientation' in self.__dict__ and self.__dict__['orientation'] is not None:
+            return self.orientation
+        if not force_recompute:
+            cached = self._load_stats('orientation')
+            if cached is not None:
+                self.orientation = cached
+                return self.orientation
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_orientation
         self.orientation = lkf_orientation(self)
+        self._save_stats('orientation', self.orientation)
         return self.orientation
 
-    def compute_lifetime(self):
+    def compute_lifetime(self, force_recompute=False):
         """Compute per-segment lifetime and cache on ``self.lifetime``.
 
         Requires that :meth:`track_lkfs` has been called beforehand so that
         tracked-pair files are available on disk.
+
+        Parameters
+        ----------
+        force_recompute : bool, optional
+            Re-run the computation even if a cached result exists.  Default ``False``.
 
         Returns
         -------
@@ -454,15 +570,28 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_lifetime` instance (also stored
             as ``self.lifetime``).
         """
+        if not force_recompute and 'lifetime' in self.__dict__ and self.__dict__['lifetime'] is not None:
+            return self.lifetime
+        if not force_recompute:
+            cached = self._load_stats('lifetime')
+            if cached is not None:
+                self.lifetime = cached
+                return self.lifetime
         from lkf_tools.stats import lkf_lifetime
         self.lifetime = lkf_lifetime(self)
+        self._save_stats('lifetime', self.lifetime)
         return self.lifetime
 
-    def compute_growthrate(self):
+    def compute_growthrate(self, force_recompute=False):
         """Compute per-segment growth and shrink rates; cache on ``self.growthrate``.
 
         Calls :meth:`compute_lifetime` and :meth:`compute_lengths` automatically
         if not already cached.  Requires that :meth:`track_lkfs` has been called.
+
+        Parameters
+        ----------
+        force_recompute : bool, optional
+            Re-run the computation even if a cached result exists.  Default ``False``.
 
         Returns
         -------
@@ -470,14 +599,22 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_growthrate` instance (also stored
             as ``self.growthrate``).
         """
-        if not hasattr(self, 'lifetime'):
-            self.compute_lifetime()
-        if not hasattr(self, 'lengths'):
-            self.compute_lengths()
+        if not force_recompute and 'growthrate' in self.__dict__ and self.__dict__['growthrate'] is not None:
+            return self.growthrate
+        if not force_recompute:
+            cached = self._load_stats('growthrate')
+            if cached is not None:
+                self.growthrate = cached
+                return self.growthrate
+        if not hasattr(self, 'lifetime') or self.lifetime is None:
+            self.compute_lifetime(force_recompute=force_recompute)
+        if not hasattr(self, 'lengths') or self.lengths is None:
+            self.compute_lengths(force_recompute=force_recompute)
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
         from lkf_tools.stats import lkf_growthrate
         self.growthrate = lkf_growthrate(self)
+        self._save_stats('growthrate', self.growthrate)
         return self.growthrate
 
     def track_lkfs(self,indexes=None, force_recompute=False):
@@ -513,9 +650,8 @@ class lkf_dataset(object):
         self.adv_time = float(self.time.diff(dim='time')[0]/1e9)*self.t_red
         
         # Do the tracking
-        for ilkf in [int(j) for j in self.indexes if j+1 not in self.tracked_lkfs]:
-            print("Track features in %s to %s" %(self.lkf_filelist[ilkf],
-                                                 self.lkf_filelist[ilkf+1]))
+        pending_track = [int(j) for j in self.indexes if j+1 not in self.tracked_lkfs]
+        for ilkf in _tqdm(pending_track, desc='Tracking LKFs', unit='pair', leave=True):
             
             # Open lkf0 and compute drift estimate
             lkf0_d = drift_estimate(self.lkfpath.joinpath(self.lkf_filelist[ilkf]),self.data,
@@ -555,12 +691,6 @@ class lkf_dataset(object):
                     tracked_pairs)
             
             
-    def density(self):
-        return (self.data.lkfs[self.timesteps_detected,:,:].notnull().sum(axis=0)/
-                self.data.div[self.timesteps_detected,:,:].notnull().sum(axis=0))
-            
-            
-            
 class process_dataset(lkf_dataset):
     def __init__(self,*args,**kwargs):
         super(process_dataset,self).__init__(*args,**kwargs)
@@ -590,27 +720,37 @@ class lkf_collection:
     >>> all_lengths_km = col.lkf_length / 1e3
     """
 
-    def __init__(self, datasets):
+    def __init__(self, datasets, label=None, by_dataset=False):
         self.datasets = list(datasets)
+        self.label = label
+        self.by_dataset = by_dataset
 
     # ── internal helpers ──────────────────────────────────────────────────────
 
     def _detected(self, ds):
-        """Return list of non-None timestep indices for *ds*."""
+        """Return list of non-None timestep indices for *ds* (lkf_dataset only)."""
         return [t for t in range(len(ds.lkfs)) if ds.lkfs[t] is not None]
 
     def _flat_1d(self, ds_attr, obj_attr):
-        """Concatenate per-segment 1-D arrays across all datasets and timesteps."""
+        """Concatenate per-segment 1-D arrays across all datasets and timesteps.
+
+        Recurses into nested :class:`lkf_collection` instances.
+        """
         parts = []
         for ds in self.datasets:
-            obj = getattr(ds, ds_attr, None)
-            if obj is None:
-                continue
-            arr = getattr(obj, obj_attr)
-            for t in self._detected(ds):
-                a = arr[t]
-                if a is not None and len(a) > 0:
-                    parts.append(np.asarray(a, dtype=float))
+            if isinstance(ds, lkf_collection):
+                arr = ds._flat_1d(ds_attr, obj_attr)
+                if len(arr) > 0:
+                    parts.append(arr)
+            else:
+                obj = getattr(ds, ds_attr, None)
+                if obj is None:
+                    continue
+                arr = getattr(obj, obj_attr)
+                for t in self._detected(ds):
+                    a = arr[t]
+                    if a is not None and len(a) > 0:
+                        parts.append(np.asarray(a, dtype=float))
         return np.concatenate(parts) if parts else np.array([])
 
     # ── compute methods ───────────────────────────────────────────────────────
@@ -621,53 +761,55 @@ class lkf_collection:
             ds.compute_projected_coords(proj=proj)
         return self
 
-    def compute_lengths(self):
+    def compute_lengths(self, force_recompute=False):
         """Call :meth:`lkf_dataset.compute_lengths` on every dataset."""
         for ds in self.datasets:
-            ds.compute_lengths()
+            ds.compute_lengths(force_recompute=force_recompute)
         return self
 
-    def compute_density(self, grid_res=50e3):
+    def compute_density(self, grid_res=50e3, force_recompute=False):
         """Call :meth:`lkf_dataset.compute_density` on every dataset."""
         for ds in self.datasets:
-            ds.compute_density(grid_res=grid_res)
+            ds.compute_density(grid_res=grid_res, force_recompute=force_recompute)
         return self
 
-    def compute_curvature(self):
+    def compute_curvature(self, force_recompute=False):
         """Call :meth:`lkf_dataset.compute_curvature` on every dataset."""
         for ds in self.datasets:
-            ds.compute_curvature()
+            ds.compute_curvature(force_recompute=force_recompute)
         return self
 
-    def compute_deformation(self):
+    def compute_deformation(self, force_recompute=False):
         """Call :meth:`lkf_dataset.compute_deformation` on every dataset."""
         for ds in self.datasets:
-            ds.compute_deformation()
+            ds.compute_deformation(force_recompute=force_recompute)
         return self
 
-    def compute_intersection(self, num_p=10, dis_par=1, use_vorticity=False):
+    def compute_intersection(self, num_p=10, dis_par=1, use_vorticity=True,
+                             force_recompute=False):
         """Call :meth:`lkf_dataset.compute_intersection` on every dataset."""
         for ds in self.datasets:
             ds.compute_intersection(num_p=num_p, dis_par=dis_par,
-                                    use_vorticity=use_vorticity)
+                                    use_vorticity=use_vorticity,
+                                    force_recompute=force_recompute)
         return self
 
-    def compute_orientation(self):
+    def compute_orientation(self, force_recompute=False):
         """Call :meth:`lkf_dataset.compute_orientation` on every dataset."""
         for ds in self.datasets:
-            ds.compute_orientation()
+            ds.compute_orientation(force_recompute=force_recompute)
         return self
 
-    def compute_lifetime(self):
+    def compute_lifetime(self, force_recompute=False):
         """Call :meth:`lkf_dataset.compute_lifetime` on every dataset."""
         for ds in self.datasets:
-            ds.compute_lifetime()
+            ds.compute_lifetime(force_recompute=force_recompute)
         return self
 
-    def compute_growthrate(self):
+    def compute_growthrate(self, force_recompute=False):
         """Call :meth:`lkf_dataset.compute_growthrate` on every dataset."""
         for ds in self.datasets:
-            ds.compute_growthrate()
+            ds.compute_growthrate(force_recompute=force_recompute)
         return self
 
     # ── flat aggregated arrays ────────────────────────────────────────────────
@@ -697,12 +839,17 @@ class lkf_collection:
         """(N, 2) array of per-segment ``[mean_div, mean_shr]`` across all datasets."""
         parts = []
         for ds in self.datasets:
-            if not hasattr(ds, 'deformation'):
-                continue
-            for t in self._detected(ds):
-                a = ds.deformation.lkf_deformation[t]
-                if a is not None and len(a) > 0:
-                    parts.append(np.asarray(a, dtype=float))
+            if isinstance(ds, lkf_collection):
+                a = ds.lkf_deformation
+                if len(a) > 0:
+                    parts.append(a)
+            else:
+                if not hasattr(ds, 'deformation'):
+                    continue
+                for t in self._detected(ds):
+                    a = ds.deformation.lkf_deformation[t]
+                    if a is not None and len(a) > 0:
+                        parts.append(np.asarray(a, dtype=float))
         return np.vstack(parts) if parts else np.empty((0, 2))
 
     @property
@@ -710,12 +857,17 @@ class lkf_collection:
         """Flat array of intersection angles (degrees) across all datasets."""
         parts = []
         for ds in self.datasets:
-            if not hasattr(ds, 'intersection'):
-                continue
-            for t in self._detected(ds):
-                a = ds.intersection.lkf_interc[t]
+            if isinstance(ds, lkf_collection):
+                a = ds.lkf_interc
                 if len(a) > 0:
-                    parts.append(np.asarray(a, dtype=float))
+                    parts.append(a)
+            else:
+                if not hasattr(ds, 'intersection'):
+                    continue
+                for t in self._detected(ds):
+                    a = ds.intersection.lkf_interc[t]
+                    if len(a) > 0:
+                        parts.append(np.asarray(a, dtype=float))
         return np.concatenate(parts) if parts else np.array([])
 
     @property
@@ -737,19 +889,35 @@ class lkf_collection:
         out[0] = np.asarray(arr, dtype=float)
         return out
 
+    @staticmethod
+    def _elem_label(elem, i):
+        """Return the label for dataset *elem* (index *i*), or a fallback."""
+        return getattr(elem, 'label', None) or f'Dataset {i + 1}'
+
+    def _iter_flat_datasets(self):
+        """Yield (lkf_dataset, label) pairs, recursing into nested collections."""
+        for i, elem in enumerate(self.datasets):
+            if isinstance(elem, lkf_collection):
+                yield from elem._iter_flat_datasets()
+            else:
+                yield elem, self._elem_label(elem, i)
+
     def plot_lengths(self, by_dataset=False, ax=None, bins=50, fit=True,
-                     colors=None):
+                     colors=None, color=None):
         """Plot log-log PDF of LKF arc-lengths.
 
         Parameters
         ----------
         by_dataset : bool, optional
-            When ``True`` overlay one faint line per dataset and a bold mean
-            line.  When ``False`` (default) use all data merged.
-        ax : matplotlib.axes.Axes, optional
-        bins, fit : passed to :meth:`lkf_lengths.plot`.
+            When ``True`` overlay one line per element and a bold mean line.
+            Nested :class:`lkf_collection` elements use their own
+            ``by_dataset`` attribute.  When ``False`` (default) all data are
+            pooled.
         colors : list, optional
-            Per-dataset colours.  Defaults to ``tab10``.
+            Per-element colours (``tab10`` by default).
+        color : str, optional
+            Override colour for the merged line (used by parent collections in
+            nested mode).
 
         Returns
         -------
@@ -759,7 +927,10 @@ class lkf_collection:
         if not by_dataset:
             proxy = types.SimpleNamespace(
                 lkf_length=self._wrap_flat(self.lkf_length))
-            return lkf_lengths.plot(proxy, ax=ax, bins=bins, fit=fit)
+            kw = {'bins': bins, 'fit': fit}
+            if color is not None:
+                kw['color'] = color
+            return lkf_lengths.plot(proxy, ax=ax, **kw)
 
         if ax is None:
             fig, ax = plt.subplots(figsize=(5, 4))
@@ -767,62 +938,97 @@ class lkf_collection:
             fig = ax.figure
         cmap = plt.cm.tab10(np.linspace(0, 1, max(len(self.datasets), 1)))
         colors = colors if colors is not None else cmap
-        for i, ds in enumerate(self.datasets):
-            if not hasattr(ds, 'lengths') or ds.lengths is None:
-                continue
-            lkf_lengths.plot(ds.lengths, ax=ax, bins=bins, color=colors[i],
-                             fit=False)
-        # Bold mean over all data
+        for i, elem in enumerate(self.datasets):
+            elem_label = self._elem_label(elem, i)
+            if isinstance(elem, lkf_collection):
+                elem.plot_lengths(ax=ax, by_dataset=elem.by_dataset,
+                                  bins=bins, fit=False, color=colors[i])
+            else:
+                if not hasattr(elem, 'lengths') or elem.lengths is None:
+                    continue
+                lkf_lengths.plot(elem.lengths, ax=ax, bins=bins,
+                                 color=colors[i], fit=False)
+            ax.plot([], [], 'o-', color=colors[i], ms=4, lw=1.5,
+                    label=elem_label)
+        # Bold merged line
         proxy = types.SimpleNamespace(lkf_length=self._wrap_flat(self.lkf_length))
         lkf_lengths.plot(proxy, ax=ax, bins=bins, color='k', fit=fit)
-        ax.set_title('LKF length distribution (per dataset + mean)')
+        mean_label = f'Mean ({self.label})' if self.label else 'Mean'
+        ax.plot([], [], 'k-o', ms=4, lw=2, label=mean_label)
+        ax.legend(fontsize=8)
+        ax.set_title('LKF length distribution')
         return fig, ax
 
-    def plot_density(self, ax=None, **kw):
-        """Plot mean spatial LKF density averaged over all datasets.
+    def plot_density(self, by_dataset=False, ax=None, **kw):
+        """Plot spatial LKF density.
 
-        The density grids are averaged on the common grid taken from the first
-        dataset.  Passes all keyword arguments to :meth:`lkf_density.plot`.
+        Parameters
+        ----------
+        by_dataset : bool, optional
+            When ``False`` (default) average all datasets onto a common grid
+            and show one map.  When ``True`` produce one subplot per dataset.
 
         Returns
         -------
-        fig, ax, pcm
+        by_dataset=False : fig, ax, pcm
+        by_dataset=True  : fig, axes (list), pcms (list)
         """
         from lkf_tools.stats import lkf_density as lkf_density_cls
-        # Collect density cubes from datasets that share the same grid
-        cubes = []
-        ref = None
-        for ds in self.datasets:
-            if not hasattr(ds, 'density') or ds.density is None:
-                continue
-            d = ds.density
+
+        if not by_dataset:
+            # ── merged mode ──────────────────────────────────────────────────
+            cubes = []
+            ref = None
+            for ds in self.datasets:
+                d = ds.density if hasattr(ds, 'density') else None
+                if isinstance(ds, lkf_collection):
+                    # recurse: treat inner collection as one merged density
+                    try:
+                        _, _, _ = ds.plot_density(by_dataset=False, **kw)
+                    except Exception:
+                        pass
+                    continue
+                if d is None:
+                    continue
+                if ref is None:
+                    ref = d
+                if d.lkf_density.shape[1:] == ref.lkf_density.shape[1:]:
+                    cubes.append(d.lkf_density)
             if ref is None:
-                ref = d
-            # Only merge grids of identical shape
-            if d.lkf_density.shape[1:] == ref.lkf_density.shape[1:]:
-                cubes.append(d.lkf_density)
-        if ref is None:
+                raise RuntimeError("No density computed; call compute_density() first.")
+            merged = np.concatenate(cubes, axis=0)
+            ice_mask = None
+            for ds in self.datasets:
+                if isinstance(ds, lkf_collection) or not hasattr(ds, 'density'):
+                    continue
+                d = ds.density
+                if d.lkf_density.shape[1:] != ref.lkf_density.shape[1:]:
+                    continue
+                m = d.ice_mask
+                if m is not None:
+                    ice_mask = m if ice_mask is None else (ice_mask | m)
+            proxy = types.SimpleNamespace(
+                lkf_density=merged, res=ref.res,
+                xedg=ref.xedg, yedg=ref.yedg, ice_mask=ice_mask)
+            return lkf_density_cls.plot(proxy, ax=ax, **kw)
+
+        # ── per-dataset mode ──────────────────────────────────────────────────
+        flat_ds = [(elem, self._elem_label(elem, i))
+                   for i, elem in enumerate(self.datasets)
+                   if hasattr(elem, 'density') and not isinstance(elem, lkf_collection)]
+        n = len(flat_ds)
+        if n == 0:
             raise RuntimeError("No density computed; call compute_density() first.")
-        merged = np.concatenate(cubes, axis=0)  # (total_timesteps, nx, ny)
-        # Merge ice masks: only from datasets whose grid matches ref
-        ice_mask = None
-        for ds in self.datasets:
-            if not hasattr(ds, 'density') or ds.density is None:
-                continue
-            d = ds.density
-            if d.lkf_density.shape[1:] != ref.lkf_density.shape[1:]:
-                continue
-            m = d.ice_mask
-            if m is not None:
-                ice_mask = m if ice_mask is None else (ice_mask | m)
-        proxy = types.SimpleNamespace(
-            lkf_density=merged,
-            res=ref.res,
-            xedg=ref.xedg,
-            yedg=ref.yedg,
-            ice_mask=ice_mask,
-        )
-        return lkf_density_cls.plot(proxy, ax=ax, **kw)
+        fig, axes = plt.subplots(1, n, figsize=(6 * n, 6),
+                                 squeeze=False)
+        axes = axes[0]
+        pcms = []
+        for idx, (ds, lbl) in enumerate(flat_ds):
+            _, _, pcm = lkf_density_cls.plot(ds.density, ax=axes[idx], **kw)
+            axes[idx].set_title(lbl)
+            pcms.append(pcm)
+        fig.tight_layout()
+        return fig, list(axes), pcms
 
     def plot_curvature(self, by_dataset=False, ax=None, colors=None, **kw):
         """Scatter plot of arc-length vs chord-length.
@@ -830,14 +1036,14 @@ class lkf_collection:
         Parameters
         ----------
         by_dataset : bool, optional
-            When ``True`` use one colour per dataset.
+            When ``True`` use one colour per element (with label).
 
         Returns
         -------
         fig, ax
         """
         from lkf_tools.stats import lkf_curvature, lkf_lengths
-        kw.pop('arc_lengths', None)  # prevent conflict with internal arc_lengths arg
+        kw.pop('arc_lengths', None)
         if not by_dataset:
             curv_proxy = types.SimpleNamespace(
                 lkf_curvature=self._wrap_flat(self.lkf_curvature))
@@ -852,14 +1058,21 @@ class lkf_collection:
             fig = ax.figure
         cmap = plt.cm.tab10(np.linspace(0, 1, max(len(self.datasets), 1)))
         colors = colors if colors is not None else cmap
-        for i, ds in enumerate(self.datasets):
-            if not hasattr(ds, 'curvature') or ds.curvature is None:
-                continue
-            lkf_curvature.plot(ds.curvature, arc_lengths=ds.lengths,
-                               ax=ax, color=colors[i],
-                               alpha=kw.get('alpha', 0.2),
-                               s=kw.get('s', 3))
-        ax.set_title('LKF arc-length vs chord-length (per dataset)')
+        for i, elem in enumerate(self.datasets):
+            elem_label = self._elem_label(elem, i)
+            if isinstance(elem, lkf_collection):
+                elem.plot_curvature(ax=ax, by_dataset=elem.by_dataset,
+                                    colors=[colors[i]])
+            else:
+                if not hasattr(elem, 'curvature') or elem.curvature is None:
+                    continue
+                lkf_curvature.plot(elem.curvature, arc_lengths=elem.lengths,
+                                   ax=ax, color=colors[i],
+                                   alpha=kw.get('alpha', 0.2),
+                                   s=kw.get('s', 3))
+            ax.plot([], [], 'o', color=colors[i], ms=4, label=elem_label)
+        ax.legend(fontsize=8)
+        ax.set_title('LKF arc-length vs chord-length')
         return fig, ax
 
     def plot_deformation(self, ax=None, **kw):
@@ -870,9 +1083,7 @@ class lkf_collection:
         fig, ax
         """
         from lkf_tools.stats import lkf_deformation
-        # lkf_deformation.plot expects an object array where each element is
-        # an (N, 2) array of [div, shr] pairs.
-        def_arr = self.lkf_deformation  # (N_total, 2)
+        def_arr = self.lkf_deformation
         wrapped = np.empty(1, dtype=object)
         wrapped[0] = def_arr
         proxy = types.SimpleNamespace(lkf_deformation=wrapped)
@@ -885,19 +1096,23 @@ class lkf_collection:
         Parameters
         ----------
         by_dataset : bool, optional
-            When ``True`` overlay one faint histogram per dataset and a bold
-            merged histogram.
+            When ``True`` overlay one faint histogram per element (with label)
+            and a bold merged histogram.
 
         Returns
         -------
         fig, ax
         """
         from lkf_tools.stats import lkf_intersection
-        # Determine use_vorticity from first available dataset
-        uv = False
+        uv = True
         for ds in self.datasets:
-            if hasattr(ds, 'intersection') and ds.intersection is not None:
-                uv = getattr(ds.intersection, 'use_vorticity', False)
+            if isinstance(ds, lkf_collection):
+                for sub, _ in ds._iter_flat_datasets():
+                    if hasattr(sub, 'intersection') and sub.intersection is not None:
+                        uv = getattr(sub.intersection, 'use_vorticity', True)
+                        break
+            elif hasattr(ds, 'intersection') and ds.intersection is not None:
+                uv = getattr(ds.intersection, 'use_vorticity', True)
                 break
 
         if not by_dataset:
@@ -912,20 +1127,27 @@ class lkf_collection:
             fig = ax.figure
         cmap = plt.cm.tab10(np.linspace(0, 1, max(len(self.datasets), 1)))
         colors = colors if colors is not None else cmap
-        for i, ds in enumerate(self.datasets):
-            if not hasattr(ds, 'intersection') or ds.intersection is None:
-                continue
-            flat = ds.intersection.lkf_interc
-            sub = types.SimpleNamespace(
-                lkf_interc=flat, use_vorticity=uv)
-            lkf_intersection.plot(sub, ax=ax, bins=bins,
-                                  color0=colors[i], color1=colors[i])
-        # Bold merged overlay
+        for i, elem in enumerate(self.datasets):
+            elem_label = self._elem_label(elem, i)
+            if isinstance(elem, lkf_collection):
+                elem.plot_intersection(ax=ax, by_dataset=elem.by_dataset,
+                                       bins=bins, colors=[colors[i]])
+            else:
+                if not hasattr(elem, 'intersection') or elem.intersection is None:
+                    continue
+                sub = types.SimpleNamespace(
+                    lkf_interc=elem.intersection.lkf_interc, use_vorticity=uv)
+                lkf_intersection.plot(sub, ax=ax, bins=bins,
+                                      color0=colors[i], color1=colors[i])
+            ax.plot([], [], '-', color=colors[i], lw=2, label=elem_label)
         proxy = types.SimpleNamespace(lkf_interc=self._wrap_flat(self.lkf_interc),
                                       use_vorticity=uv)
         lkf_intersection.plot(proxy, ax=ax, bins=bins,
                               color0='k', color1='0.4')
-        ax.set_title('LKF intersection angles (per dataset + mean)')
+        ax.plot([], [], 'k-', lw=2.5,
+                label=f'Mean ({self.label})' if self.label else 'Mean')
+        ax.legend(fontsize=8)
+        ax.set_title('LKF intersection angles')
         return fig, ax
 
     def plot_orientation(self, by_dataset=False, ax=None, bins=36,
@@ -935,7 +1157,7 @@ class lkf_collection:
         Parameters
         ----------
         by_dataset : bool, optional
-            When ``True`` overlay one rose per dataset (faint) and bold mean.
+            When ``True`` overlay one rose per element (with label) and bold mean.
 
         Returns
         -------
@@ -954,18 +1176,26 @@ class lkf_collection:
             fig = ax.figure
         cmap = plt.cm.tab10(np.linspace(0, 1, max(len(self.datasets), 1)))
         colors = colors if colors is not None else cmap
-        for i, ds in enumerate(self.datasets):
-            if not hasattr(ds, 'orientation') or ds.orientation is None:
-                continue
-            lkf_orientation.plot(ds.orientation, ax=ax, bins=bins,
-                                 color=colors[i],
-                                 density=kw.get('density', True))
-        # Bold mean
+        for i, elem in enumerate(self.datasets):
+            elem_label = self._elem_label(elem, i)
+            if isinstance(elem, lkf_collection):
+                elem.plot_orientation(ax=ax, by_dataset=elem.by_dataset,
+                                      bins=bins, colors=[colors[i]])
+            else:
+                if not hasattr(elem, 'orientation') or elem.orientation is None:
+                    continue
+                lkf_orientation.plot(elem.orientation, ax=ax, bins=bins,
+                                     color=colors[i],
+                                     density=kw.get('density', True))
+            ax.plot([], [], '-', color=colors[i], lw=2, label=elem_label)
         proxy = types.SimpleNamespace(
             lkf_orientation=self._wrap_flat(self.lkf_orientation))
         lkf_orientation.plot(proxy, ax=ax, bins=bins, color='k',
                              density=kw.get('density', True))
-        ax.set_title('LKF orientation (per dataset + mean)')
+        ax.plot([], [], 'k-', lw=2.5,
+                label=f'Mean ({self.label})' if self.label else 'Mean')
+        ax.legend(fontsize=8, loc='upper right')
+        ax.set_title('LKF orientation')
         return fig, ax
 
     def plot_lifetime(self, by_dataset=False, ax=None, colors=None, **kw):
@@ -974,7 +1204,7 @@ class lkf_collection:
         Parameters
         ----------
         by_dataset : bool, optional
-            When ``True`` overlay one line per dataset (fit only) and bold mean.
+            When ``True`` overlay one line per element (with label) and bold mean.
 
         Returns
         -------
@@ -992,16 +1222,24 @@ class lkf_collection:
             fig = ax.figure
         cmap = plt.cm.tab10(np.linspace(0, 1, max(len(self.datasets), 1)))
         colors = colors if colors is not None else cmap
-        for i, ds in enumerate(self.datasets):
-            if not hasattr(ds, 'lifetime') or ds.lifetime is None:
-                continue
-            lkf_lifetime.plot(ds.lifetime, ax=ax, color=colors[i],
-                              fit=kw.get('fit', True))
-        # Bold mean
+        for i, elem in enumerate(self.datasets):
+            elem_label = self._elem_label(elem, i)
+            if isinstance(elem, lkf_collection):
+                elem.plot_lifetime(ax=ax, by_dataset=elem.by_dataset,
+                                   colors=[colors[i]])
+            else:
+                if not hasattr(elem, 'lifetime') or elem.lifetime is None:
+                    continue
+                lkf_lifetime.plot(elem.lifetime, ax=ax, color=colors[i],
+                                  fit=kw.get('fit', True))
+            ax.plot([], [], '-', color=colors[i], lw=2, label=elem_label)
         proxy = types.SimpleNamespace(
             lkf_lifetime=self._wrap_flat(self.lkf_lifetime))
         lkf_lifetime.plot(proxy, ax=ax, color='k', fit=kw.get('fit', True))
-        ax.set_title('LKF lifetime distribution (per dataset + mean)')
+        ax.plot([], [], 'k-', lw=2.5,
+                label=f'Mean ({self.label})' if self.label else 'Mean')
+        ax.legend(fontsize=8)
+        ax.set_title('LKF lifetime distribution')
         return fig, ax
 
     def plot_growthrate(self, by_dataset=False, ax=None, colors=None, **kw):
@@ -1010,8 +1248,7 @@ class lkf_collection:
         Parameters
         ----------
         by_dataset : bool, optional
-            When ``True`` overlay one line per dataset (growth panel and shrink
-            panel) plus the bold mean.
+            When ``True`` overlay one line per element (with label) plus bold mean.
 
         Returns
         -------
@@ -1034,23 +1271,30 @@ class lkf_collection:
             axes = ax
         cmap = plt.cm.tab10(np.linspace(0, 1, max(len(self.datasets), 1)))
         colors = colors if colors is not None else cmap
-        for i, ds in enumerate(self.datasets):
-            if not hasattr(ds, 'growthrate') or ds.growthrate is None:
-                continue
-            lkf_growthrate.plot(ds.growthrate, ax=axes,
-                                color_growth=colors[i],
-                                color_shrink=colors[i],
-                                fit=kw.get('fit', True))
-        # Bold mean
+        for i, elem in enumerate(self.datasets):
+            elem_label = self._elem_label(elem, i)
+            if isinstance(elem, lkf_collection):
+                elem.plot_growthrate(ax=axes, by_dataset=elem.by_dataset,
+                                     colors=[colors[i]])
+            else:
+                if not hasattr(elem, 'growthrate') or elem.growthrate is None:
+                    continue
+                lkf_growthrate.plot(elem.growthrate, ax=axes,
+                                    color_growth=colors[i],
+                                    color_shrink=colors[i],
+                                    fit=kw.get('fit', True))
+            axes[0].plot([], [], '-', color=colors[i], lw=2, label=elem_label)
         wrapped_g = np.empty(1, dtype=object)
         wrapped_g[0] = np.asarray(self.lkf_growth, dtype=float)
         wrapped_s = np.empty(1, dtype=object)
         wrapped_s[0] = np.asarray(self.lkf_shrink, dtype=float)
-        proxy = types.SimpleNamespace(lkf_growth=wrapped_g,
-                                      lkf_shrink=wrapped_s)
+        proxy = types.SimpleNamespace(lkf_growth=wrapped_g, lkf_shrink=wrapped_s)
         lkf_growthrate.plot(proxy, ax=axes, color_growth='k',
                             color_shrink='0.4', fit=kw.get('fit', True))
-        axes[0].set_title('Growth rate (per dataset + mean)')
-        axes[1].set_title('Shrink rate (per dataset + mean)')
+        mean_label = f'Mean ({self.label})' if self.label else 'Mean'
+        axes[0].plot([], [], 'k-', lw=2.5, label=mean_label)
+        axes[0].legend(fontsize=8)
+        axes[0].set_title('Growth rate')
+        axes[1].set_title('Shrink rate')
         return fig, axes
 

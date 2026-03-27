@@ -339,7 +339,10 @@ def test_compute_deformation_method(detected_dataset):
 # ---------------------------------------------------------------------------
 
 def test_lkf_intersection_angles_range(detected_dataset):
-    """All intersection angles must lie in [0, 90] degrees."""
+    """All intersection angles must lie in [0, 180] degrees.
+
+    With use_vorticity=True (default), oriented angles span [0, 180].
+    """
     from lkf_tools.stats import lkf_intersection
     ds = detected_dataset
     result = lkf_intersection(ds)
@@ -350,8 +353,8 @@ def test_lkf_intersection_angles_range(detected_dataset):
         if len(angles) == 0:
             continue
         arr = np.array(angles)
-        assert np.all(arr >= 0) and np.all(arr <= 90), (
-            f"timestep {t}: angles out of [0, 90]: min={arr.min():.2f} max={arr.max():.2f}"
+        assert np.all(arr >= 0) and np.all(arr <= 180), (
+            f"timestep {t}: angles out of [0, 180]: min={arr.min():.2f} max={arr.max():.2f}"
         )
 
 
