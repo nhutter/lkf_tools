@@ -94,7 +94,8 @@ def nan_gaussian_filter(field,kernel,truncate):
     field_nonnan_f = ndim.gaussian_filter(field_nonnan,kernel,truncate=truncate)
     mask_nan_f = ndim.gaussian_filter(mask_nan,kernel,truncate=truncate)
 
-    gaussian_field = field_nonnan_f/mask_nan_f
+    with np.errstate(invalid='ignore', divide='ignore'):
+        gaussian_field = field_nonnan_f/mask_nan_f
 
     #gaussian_field[np.isnan(field) | np.isnan(gaussian_field)] = 0.
     
@@ -1157,7 +1158,9 @@ def lkf_detect_eps_multday(eps_tot,max_kernel=5,min_kernel=1,
     lkf_detect = (lkf_detect_multday > 0)
     
     # Compute average total deformation
-    eps_tot = np.nanmean(np.stack(eps_tot),axis=0)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        eps_tot = np.nanmean(np.stack(eps_tot),axis=0)
 
     ## Apply morphological thinning
     if skeleton_kernel==0:
@@ -1178,16 +1181,18 @@ def lkf_detect_eps_multday(eps_tot,max_kernel=5,min_kernel=1,
     seg = [i for i in seg if i.size>2]
 
     # Reconnection of segments
-    eps_mn = compute_mn_eps(np.log10(eps_tot),seg)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        log_eps = np.log10(eps_tot)
+    eps_mn = compute_mn_eps(log_eps,seg)
     num_points_segs = np.array([i.size/2. for i in seg])
     ## Initialize array containing start and end point of segments
     segs = np.array([np.stack([i[:,0],i[:,-1]]).T for i in seg])
-    
+
     seg = seg_reconnection(seg,segs,eps_mn,num_points_segs,1.5,
                            50,eps_thres,ellp_fac=1)
 
     # Reconnection of segments
-    eps_mn = compute_mn_eps(np.log10(eps_tot),seg)
+    eps_mn = compute_mn_eps(log_eps,seg)
     num_points_segs = np.array([i.size/2. for i in seg])
     ## Initialize array containing start and end point of segments
     segs = np.array([np.stack([i[:,0],i[:,-1]]).T for i in seg])
