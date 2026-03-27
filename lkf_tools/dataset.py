@@ -938,17 +938,16 @@ class lkf_collection:
             else:
                 yield elem, self._elem_label(elem, i)
 
-    def plot_lengths(self, by_dataset=False, ax=None, bins=50, fit=True,
+    def plot_lengths(self, by_dataset=None, ax=None, bins=50, fit=True,
                      colors=None, color=None):
         """Plot log-log PDF of LKF arc-lengths.
 
         Parameters
         ----------
-        by_dataset : bool, optional
+        by_dataset : bool or None, optional
             When ``True`` overlay one line per element and a bold mean line.
-            Nested :class:`lkf_collection` elements use their own
-            ``by_dataset`` attribute.  When ``False`` (default) all data are
-            pooled.
+            When ``False`` all data are pooled.  ``None`` (default) inherits
+            ``self.by_dataset``.
         colors : list, optional
             Per-element colours (``tab10`` by default).
         color : str, optional
@@ -959,6 +958,8 @@ class lkf_collection:
         -------
         fig, ax
         """
+        if by_dataset is None:
+            by_dataset = self.by_dataset
         from lkf_tools.stats import lkf_lengths
         if not by_dataset:
             proxy = types.SimpleNamespace(
@@ -995,20 +996,23 @@ class lkf_collection:
         ax.set_title('LKF length distribution')
         return fig, ax
 
-    def plot_density(self, by_dataset=False, ax=None, **kw):
+    def plot_density(self, by_dataset=None, ax=None, **kw):
         """Plot spatial LKF density.
 
         Parameters
         ----------
-        by_dataset : bool, optional
-            When ``False`` (default) average all datasets onto a common grid
-            and show one map.  When ``True`` produce one subplot per dataset.
+        by_dataset : bool or None, optional
+            When ``False`` average all datasets onto a common grid and show one
+            map.  When ``True`` produce one subplot row per top-level element.
+            ``None`` (default) inherits ``self.by_dataset``.
 
         Returns
         -------
         by_dataset=False : fig, ax, pcm
         by_dataset=True  : fig, axes (list), pcms (list)
         """
+        if by_dataset is None:
+            by_dataset = self.by_dataset
         from lkf_tools.stats import lkf_density as lkf_density_cls
 
         if not by_dataset:
@@ -1073,9 +1077,19 @@ class lkf_collection:
         n = len(panels)
         if n == 0:
             raise RuntimeError("No density computed; call compute_density() first.")
-        fig, axes = plt.subplots(1, n, figsize=(6 * n, 6),
-                                 squeeze=False)
-        axes = axes[0]
+        # Build GeoAxes when coastlines are requested (matches lkf_density.plot behaviour)
+        subplot_kw = {}
+        if kw.get('coastlines', True):
+            try:
+                import cartopy.crs as ccrs
+                proj_crs = kw.get('proj_crs') or ccrs.NorthPolarStereo(
+                    central_longitude=-45, true_scale_latitude=75)
+                subplot_kw = {'projection': proj_crs}
+            except ImportError:
+                pass
+        fig, axes = plt.subplots(n, 1, figsize=(8, 6 * n),
+                                 squeeze=False, subplot_kw=subplot_kw)
+        axes = axes[:, 0]
         pcms = []
         for idx, (proxy, lbl) in enumerate(panels):
             _, _, pcm = lkf_density_cls.plot(proxy, ax=axes[idx], **kw)
@@ -1084,18 +1098,21 @@ class lkf_collection:
         fig.tight_layout()
         return fig, list(axes), pcms
 
-    def plot_curvature(self, by_dataset=False, ax=None, colors=None, **kw):
+    def plot_curvature(self, by_dataset=None, ax=None, colors=None, **kw):
         """Scatter plot of arc-length vs chord-length.
 
         Parameters
         ----------
-        by_dataset : bool, optional
+        by_dataset : bool or None, optional
             When ``True`` use one colour per element (with label).
+            ``None`` (default) inherits ``self.by_dataset``.
 
         Returns
         -------
         fig, ax
         """
+        if by_dataset is None:
+            by_dataset = self.by_dataset
         from lkf_tools.stats import lkf_curvature, lkf_lengths
         kw.pop('arc_lengths', None)
         if not by_dataset:
@@ -1143,20 +1160,23 @@ class lkf_collection:
         proxy = types.SimpleNamespace(lkf_deformation=wrapped)
         return lkf_deformation.plot(proxy, ax=ax, **kw)
 
-    def plot_intersection(self, by_dataset=False, ax=None, bins=18,
+    def plot_intersection(self, by_dataset=None, ax=None, bins=18,
                           colors=None, **kw):
         """Plot histogram of LKF intersection angles.
 
         Parameters
         ----------
-        by_dataset : bool, optional
+        by_dataset : bool or None, optional
             When ``True`` overlay one faint histogram per element (with label)
-            and a bold merged histogram.
+            and a bold merged histogram.  ``None`` (default) inherits
+            ``self.by_dataset``.
 
         Returns
         -------
         fig, ax
         """
+        if by_dataset is None:
+            by_dataset = self.by_dataset
         from lkf_tools.stats import lkf_intersection
         uv = True
         for ds in self.datasets:
@@ -1204,19 +1224,22 @@ class lkf_collection:
         ax.set_title('LKF intersection angles')
         return fig, ax
 
-    def plot_orientation(self, by_dataset=False, ax=None, bins=36,
+    def plot_orientation(self, by_dataset=None, ax=None, bins=36,
                          colors=None, **kw):
         """Polar rose diagram of LKF orientations.
 
         Parameters
         ----------
-        by_dataset : bool, optional
+        by_dataset : bool or None, optional
             When ``True`` overlay one rose per element (with label) and bold mean.
+            ``None`` (default) inherits ``self.by_dataset``.
 
         Returns
         -------
         fig, ax
         """
+        if by_dataset is None:
+            by_dataset = self.by_dataset
         from lkf_tools.stats import lkf_orientation
         if not by_dataset:
             proxy = types.SimpleNamespace(
@@ -1252,18 +1275,21 @@ class lkf_collection:
         ax.set_title('LKF orientation')
         return fig, ax
 
-    def plot_lifetime(self, by_dataset=False, ax=None, colors=None, **kw):
+    def plot_lifetime(self, by_dataset=None, ax=None, colors=None, **kw):
         """Log-histogram of LKF lifetimes with exponential fit.
 
         Parameters
         ----------
-        by_dataset : bool, optional
+        by_dataset : bool or None, optional
             When ``True`` overlay one line per element (with label) and bold mean.
+            ``None`` (default) inherits ``self.by_dataset``.
 
         Returns
         -------
         fig, ax
         """
+        if by_dataset is None:
+            by_dataset = self.by_dataset
         from lkf_tools.stats import lkf_lifetime
         if not by_dataset:
             proxy = types.SimpleNamespace(
@@ -1296,18 +1322,21 @@ class lkf_collection:
         ax.set_title('LKF lifetime distribution')
         return fig, ax
 
-    def plot_growthrate(self, by_dataset=False, ax=None, colors=None, **kw):
+    def plot_growthrate(self, by_dataset=None, ax=None, colors=None, **kw):
         """Log-log PDFs of LKF growth and shrink rates.
 
         Parameters
         ----------
-        by_dataset : bool, optional
+        by_dataset : bool or None, optional
             When ``True`` overlay one line per element (with label) plus bold mean.
+            ``None`` (default) inherits ``self.by_dataset``.
 
         Returns
         -------
         fig, axes : Figure and array of two Axes.
         """
+        if by_dataset is None:
+            by_dataset = self.by_dataset
         from lkf_tools.stats import lkf_growthrate
         if not by_dataset:
             wrapped_g = np.empty(1, dtype=object)
