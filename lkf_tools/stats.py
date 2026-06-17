@@ -1068,8 +1068,41 @@ class lkf_intersection:
         angle = 90. if np.isnan(p) else np.arctan(p) / np.pi * 180.
         return angle, vor_mean
 
+    @staticmethod
+    def _grid_angle_at(ang_lkf, intcp, grid_xy):
+        """Minimum acute angle (deg) between an LKF and the model grid axes.
+
+        Adapts Lemieux et al.'s "angle with grid" to the intersection point:
+        the local grid-i (column) and grid-j (row) axis directions are obtained
+        by central-differencing the projected coordinate grid at the contact
+        pixel, and the LKF orientation ``ang_lkf`` (degrees, from a local fit in
+        the same projected frame) is compared to both.  Returns the minimum of
+        the two acute angles, in [0, 90] (≈[0, 45] for an orthogonal grid).
+
+        Returns ``np.nan`` if the contact pixel is on the grid border (no
+        central difference possible) or no grid is available.
+        """
+        if grid_xy is None or np.isnan(ang_lkf):
+            return np.nan
+        Xg, Yg = grid_xy
+        ny, nx = Xg.shape
+        r = int(round(intcp[0])); c = int(round(intcp[1]))
+        if r <= 0 or r >= ny - 1 or c <= 0 or c >= nx - 1:
+            return np.nan
+        # grid-i axis (increasing column) and grid-j axis (increasing row)
+        ang_i = np.degrees(np.arctan2(Yg[r, c + 1] - Yg[r, c - 1],
+                                      Xg[r, c + 1] - Xg[r, c - 1]))
+        ang_j = np.degrees(np.arctan2(Yg[r + 1, c] - Yg[r - 1, c],
+                                      Xg[r + 1, c] - Xg[r - 1, c]))
+
+        def _acute(a, b):
+            d = abs(a - b) % 180.
+            return min(d, 180. - d)
+
+        return min(_acute(ang_lkf, ang_i), _acute(ang_lkf, ang_j))
+
     def _process_timestep(self, segs, indm0, indm1, num_p, dis_par, is_legacy,
-                          use_vorticity=False, indd2=None):
+                          use_vorticity=False, indd2=None, grid_xy=None):
         """Core intersection logic shared by both API variants.
 
         Uses a sparse dict-based neighbourhood search instead of dense boolean
@@ -1109,6 +1142,8 @@ class lkf_intersection:
         intc_ang = []
         intc_par = []
         intc_type = []
+        intc_gridang = []   # per-intersection [grid_ang_i, grid_ang_partner]
+        intc_gridpar = []   # matching [iseg, partner] pairs
         _indd2 = indd2 if use_vorticity else None
 
         for iseg, seg_i in enumerate(segs):
@@ -1153,6 +1188,14 @@ class lkf_intersection:
                 ang_ii, vor1 = self._angle_near_point(get_rows(seg_p), get_cols(seg_p), seg_p,
                                                       indm0, indm1, intcp, num_p,
                                                       is_legacy, _indd2)
+                # Angle of each LKF with the model grid axes at the contact
+                # point (computed from the unmodified orientations, before any
+                # vorticity-driven +180 adjustment below).
+                if grid_xy is not None:
+                    intc_gridang.append(np.array([
+                        self._grid_angle_at(ang_i, intcp, grid_xy),
+                        self._grid_angle_at(ang_ii, intcp, grid_xy)]))
+                    intc_gridpar.append(np.array([iseg, pari]))
                 if use_vorticity and vor0 is not None and vor1 is not None:
                     pair_arr = np.array([iseg, pari])
                     if vor0 > 0 and vor1 < 0:
@@ -1176,13 +1219,14 @@ class lkf_intersection:
                         angdiff = 180 - angdiff
                     intc_ang.append(angdiff)
                     intc_par.append(np.array([iseg, pari]))
-        return intc_ang, intc_par, intc_type
+        return intc_ang, intc_par, intc_type, intc_gridang, intc_gridpar
 
     def __init__(self, lkf, num_p=10, dis_par=1, use_vorticity=True):
         self.use_vorticity = use_vorticity
         self._lkf = lkf  # back-reference used by plot(lifetime=<int>)
         indd2 = getattr(lkf, 'indd2', None)
         if hasattr(lkf, 'lkf_dataset'):
+            # Legacy nested structure: no projection info → skip grid angle.
             lkf_interc = []
             lkf_interc_par = []
             for lkf_year in lkf.lkf_dataset:
@@ -1191,36 +1235,72 @@ class lkf_intersection:
                 for lkf_day in lkf_year:
                     if len(lkf_day) == 0:
                         ang_year.append([]); par_year.append([]); continue
-                    a, p, _ = self._process_timestep(lkf_day, lkf.indm0, lkf.indm1,
-                                                     num_p, dis_par, is_legacy=True,
-                                                     use_vorticity=False)
+                    a, p, _, _, _ = self._process_timestep(lkf_day, lkf.indm0, lkf.indm1,
+                                                            num_p, dis_par, is_legacy=True,
+                                                            use_vorticity=False)
                     ang_year.append(a); par_year.append(p)
                 lkf_interc.append(ang_year)
                 lkf_interc_par.append(par_year)
             self.lkf_interc = np.array(lkf_interc)
             self.lkf_interc_par = np.array(lkf_interc_par)
+            self.lkf_interc_gridangle = None
+            self.lkf_interc_gridpar = None
         else:
+            grid_xy = self._build_grid_xy(lkf)
             lkf_interc = []
             lkf_interc_par = []
             lkf_interc_type = []
+            lkf_interc_gridang = []
+            lkf_interc_gridpar = []
             for t in range(len(lkf.lkfs)):
                 if lkf.lkfs[t] is None or len(lkf.lkfs[t]) == 0:
                     lkf_interc.append([]); lkf_interc_par.append([])
+                    lkf_interc_gridang.append([]); lkf_interc_gridpar.append([])
                     if use_vorticity:
                         lkf_interc_type.append([])
                     continue
-                a, p, ty = self._process_timestep(lkf.lkfs[t], lkf.indm0, lkf.indm1,
-                                                  num_p, dis_par, is_legacy=False,
-                                                  use_vorticity=use_vorticity,
-                                                  indd2=indd2)
+                a, p, ty, ga, gp = self._process_timestep(lkf.lkfs[t], lkf.indm0, lkf.indm1,
+                                                          num_p, dis_par, is_legacy=False,
+                                                          use_vorticity=use_vorticity,
+                                                          indd2=indd2, grid_xy=grid_xy)
                 lkf_interc.append(a)
                 lkf_interc_par.append(p)
+                lkf_interc_gridang.append(ga)
+                lkf_interc_gridpar.append(gp)
                 if use_vorticity:
                     lkf_interc_type.append(ty)
             self.lkf_interc = np.array(lkf_interc, dtype=object)
             self.lkf_interc_par = np.array(lkf_interc_par, dtype=object)
             if use_vorticity:
                 self.lkf_interc_type = np.array(lkf_interc_type, dtype=object)
+            if grid_xy is not None:
+                self.lkf_interc_gridangle = np.array(lkf_interc_gridang, dtype=object)
+                self.lkf_interc_gridpar = np.array(lkf_interc_gridpar, dtype=object)
+            else:
+                self.lkf_interc_gridangle = None
+                self.lkf_interc_gridpar = None
+
+    @staticmethod
+    def _build_grid_xy(lkf):
+        """Project the cropped/subsampled lon/lat grid to (X, Y) metres.
+
+        Returns ``(Xg, Yg)`` 2-D arrays that segment row/col index into, or
+        ``None`` when the dataset lacks the projection or grid information
+        (e.g. ``latlon=False`` or a legacy reader) — in which case the
+        grid-angle computation is silently skipped.
+        """
+        needed = ('proj', 'lon', 'lat', 'index_x', 'index_y', 'red_fac')
+        if not all(hasattr(lkf, a) for a in needed):
+            return None
+        try:
+            ysl = slice(max(0, lkf.index_y[0][0] - 1), lkf.index_y[0][-1] + 2, lkf.red_fac)
+            xsl = slice(max(0, lkf.index_x[0][0] - 1), lkf.index_x[0][-1] + 2, lkf.red_fac)
+            lon_c = np.array(lkf.lon[ysl, xsl])
+            lat_c = np.array(lkf.lat[ysl, xsl])
+            Xg, Yg = lkf.proj(lon_c, lat_c)
+            return (np.array(Xg), np.array(Yg))
+        except Exception:
+            return None
 
     def plot(self, ax=None, bins=18, color0='C0', color1='C1', lifetime=None,
              intersection_type='both', label=None):
@@ -1359,6 +1439,60 @@ class lkf_intersection:
         fig.tight_layout()
         return fig, ax
 
+    def plot_grid_angle(self, ax=None, color='dodgerblue', label=None):
+        """Plot the PDF of LKF-to-grid angles as in Lemieux et al.
+
+        Replicates the paper figure (``PDF_angle_with_grid_at_mid_length.py``):
+        a density histogram of the minimum angle between each LKF and the
+        nearest model grid axis, over 2.5° bins from 0–45°.  Here the angle is
+        evaluated at each intersection contact point (per participating
+        segment) rather than at the LKF mid-point.
+
+        Raises a ``RuntimeError`` if grid angles are unavailable (legacy
+        dataset, or detection run without projection information).
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on.  A new figure is created if *None*.
+        color : str, optional
+            Bar colour.  Default ``'dodgerblue'``.
+        label : str or None, optional
+            Legend label for the histogram.
+
+        Returns
+        -------
+        fig, ax : Figure and Axes objects.
+        """
+        if getattr(self, 'lkf_interc_gridangle', None) is None:
+            raise RuntimeError(
+                "Grid angles are unavailable for this dataset (no projection "
+                "information). They are only computed for the new lkf_dataset "
+                "structure detected with latlon=True.")
+
+        all_ga = _flatten_obj(self.lkf_interc_gridangle)
+        all_ga = np.asarray(all_ga, dtype=float).ravel()
+        all_ga = all_ga[~np.isnan(all_ga)]
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(5, 4))
+        else:
+            fig = ax.figure
+
+        bins = np.arange(0, 45 + 2.5, 2.5)
+        ax.hist(all_ga, bins=bins, density=True, color=color, ec=color,
+                label=label)
+        if len(all_ga):
+            ax.axvline(np.mean(all_ga), color='k', ls='--', lw=1,
+                       label=f'mean = {np.mean(all_ga):.1f}°')
+        ax.set_xlim(0, 45)
+        ax.set_xlabel('Minimum angle with x or y axis (°)')
+        ax.set_ylabel('PDF')
+        ax.set_title('LKF angle with grid')
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        return fig, ax
+
 
 class lkf_orientation:
     """Compute the orientation angle of each LKF segment.
@@ -1466,6 +1600,133 @@ class lkf_orientation:
         ax.set_xticks(np.deg2rad([0, 45, 90, 135, 180, 225, 270, 315]))
         ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'])
         ax.set_title('LKF orientation', pad=15)
+        fig.tight_layout()
+        return fig, ax
+
+
+class lkf_width:
+    """Collect per-pixel LKF half-widths (Lemieux et al.).
+
+    Reads the two half-width columns (``indwidth0``, ``indwidth1``) that
+    :func:`lkf_tools.detection.segs2width` appends to each segment during
+    detection (``compute_width=True``).  Half-widths are in grid cells; the
+    full LKF width at a pixel is ``halfw1 + halfw2``.
+
+    Only the new flat ``dataset.lkf_dataset`` structure carries width columns;
+    a legacy nested ``stats.lkf_dataset`` (which lacks them) yields empty arrays.
+
+    Parameters
+    ----------
+    lkf : lkf_dataset
+        Dataset instance detected with ``compute_width=True``.
+
+    Attributes
+    ----------
+    halfw1, halfw2 : np.ndarray
+        Flat 1-D arrays of all (positive, non-NaN) half-widths in grid cells.
+    width : np.ndarray
+        Flat 1-D array of full widths ``halfw1 + halfw2`` (both halves valid).
+    """
+
+    def __init__(self, lkf):
+        self.indwidth0 = getattr(lkf, 'indwidth0', None)
+        self.indwidth1 = getattr(lkf, 'indwidth1', None)
+        hw1, hw2, width = [], [], []
+
+        if self.indwidth0 is None or hasattr(lkf, 'lkf_dataset'):
+            # Legacy structure / no width columns: nothing to collect.
+            self.halfw1 = np.array([])
+            self.halfw2 = np.array([])
+            self.width = np.array([])
+            return
+
+        i0, i1 = self.indwidth0, self.indwidth1
+        for t in range(len(lkf.lkfs)):
+            if lkf.lkfs[t] is None:
+                continue
+            for seg in lkf.lkfs[t]:
+                w1 = seg[i0, :]
+                w2 = seg[i1, :]
+                hw1.extend(w1[w1 > 0].tolist())
+                hw2.extend(w2[w2 > 0].tolist())
+                both = (w1 > 0) & (w2 > 0)
+                width.extend((w1[both] + w2[both]).tolist())
+
+        self.halfw1 = np.array(hw1)
+        self.halfw2 = np.array(hw2)
+        self.width = np.array(width)
+
+    def plot(self, ax=None, dsearch=5, color='dodgerblue', label=None,
+             density=True):
+        """Plot the LKF width distribution as in Lemieux et al.
+
+        Replicates the paper figure (``stats_LKF_width.py``): a bar histogram
+        of the full width ``halfw1 + halfw2`` (grid cells) over bins of width
+        0.2 starting at 0.9.  The mean (dashed) and mode (dotted) widths are
+        drawn as vertical lines with their exact values in the legend, and the
+        legend title reports the sample size *N*.
+
+        Note: the width is a sum of two ``sqrt(integer² + integer²)``
+        half-widths, so it only takes a handful of discrete values; the fine
+        0.2-wide bins therefore look "scattered" (empty bins between the
+        discrete values) regardless of sample size.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on.  A new figure is created if *None*.
+        dsearch : int, optional
+            Search distance used during detection (only sets the x-axis upper
+            limit, ``2*dsearch``).  Default 5.
+        color : str, optional
+            Bar colour.  Default ``'dodgerblue'``.
+        label : str or None, optional
+            Legend label for the bars.
+        density : bool, optional
+            If ``True`` (default) plot the fraction of counts (paper style);
+            if ``False`` plot the raw number of LKF points per bin (useful to
+            check the sample size).
+
+        Returns
+        -------
+        fig, ax : Figure and Axes objects.
+        """
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(5, 4))
+        else:
+            fig = ax.figure
+
+        width = self.width
+        npoints = width.size
+        # bins of width 0.2 from 0.9 (matches the paper's PDF_width script)
+        nbbins = 71
+        delta = 0.2
+        mybins = 0.9 + np.arange(nbbins + 1) * delta
+        binc = 0.5 * (mybins[:-1] + mybins[1:])
+
+        counts, _ = np.histogram(width, bins=mybins)
+        if density:
+            h = counts / npoints if npoints else counts.astype(float)
+            ylabel = 'Fraction of counts'
+        else:
+            h = counts
+            ylabel = 'Number of LKF points'
+
+        ax.bar(binc, h, width=delta, color=color, label=label)
+
+        if npoints:
+            mean_w = float(np.mean(width))
+            vals, vc = np.unique(np.round(width, 6), return_counts=True)
+            mode_w = float(vals[vc.argmax()])
+            ax.axvline(mean_w, color='k', ls='--', lw=1.5,
+                       label=f'mean = {mean_w:.2f} cells')
+            ax.axvline(mode_w, color='firebrick', ls=':', lw=2,
+                       label=f'mode = {mode_w:.2f} cells')
+
+        ax.set_xlabel('LKF width (grid cells)', fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_xlim([0, 2 * dsearch])
+        ax.legend(title=f'N = {npoints:,} points')
         fig.tight_layout()
         return fig, ax
 

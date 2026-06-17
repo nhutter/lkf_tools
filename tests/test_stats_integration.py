@@ -34,8 +34,14 @@ def detected_dataset(tmp_path_factory):
 # Phase A: coordinate projection
 # ---------------------------------------------------------------------------
 
+# With compute_width=True (default), segments carry two half-width columns
+# (rows 7,8), so projected x,y land at rows 9,10 and segments have 11 rows.
+N_COLS = 11
+IDX_X, IDX_Y = 9, 10
+
+
 def test_projected_coords_column_count(detected_dataset):
-    """After compute_projected_coords(), every segment must have 9 rows."""
+    """After compute_projected_coords(), every segment must have 11 rows."""
     ds = detected_dataset
     ds.compute_projected_coords()
 
@@ -44,17 +50,17 @@ def test_projected_coords_column_count(detected_dataset):
 
     for t in detected_ts:
         for i, seg in enumerate(ds.lkfs[t]):
-            assert seg.shape[0] == 9, (
-                f"Segment {i} at timestep {t}: expected 9 rows, got {seg.shape[0]}"
+            assert seg.shape[0] == N_COLS, (
+                f"Segment {i} at timestep {t}: expected {N_COLS} rows, got {seg.shape[0]}"
             )
 
 
 def test_projected_coords_index_pointers(detected_dataset):
-    """compute_projected_coords() must set indm0=7, indm1=8 on the dataset."""
+    """compute_projected_coords() must set indm0=9, indm1=10 (width columns present)."""
     ds = detected_dataset
     ds.compute_projected_coords()
-    assert ds.indm0 == 7
-    assert ds.indm1 == 8
+    assert ds.indm0 == IDX_X
+    assert ds.indm1 == IDX_Y
 
 
 def test_projected_coords_values(detected_dataset):
@@ -65,15 +71,15 @@ def test_projected_coords_values(detected_dataset):
     detected_ts = [t for t in range(len(ds.lkfs)) if ds.lkfs[t] is not None]
     # Check the first segment of the first detected timestep
     t = detected_ts[0]
-    seg = ds.lkfs[t][0]  # shape (9, N_points)
+    seg = ds.lkfs[t][0]  # shape (11, N_points)
 
     lon = seg[2, :]
     lat = seg[3, :]
     x_expected, y_expected = _DEFAULT_PROJ(lon, lat)
 
-    np.testing.assert_allclose(seg[7, :], x_expected, rtol=1e-6,
+    np.testing.assert_allclose(seg[IDX_X, :], x_expected, rtol=1e-6,
                                err_msg="x-coordinate mismatch")
-    np.testing.assert_allclose(seg[8, :], y_expected, rtol=1e-6,
+    np.testing.assert_allclose(seg[IDX_Y, :], y_expected, rtol=1e-6,
                                err_msg="y-coordinate mismatch")
 
 
@@ -86,8 +92,8 @@ def test_projected_coords_idempotent(detected_dataset):
     detected_ts = [t for t in range(len(ds.lkfs)) if ds.lkfs[t] is not None]
     for t in detected_ts:
         for seg in ds.lkfs[t]:
-            assert seg.shape[0] == 9, (
-                f"Expected 9 rows after double call, got {seg.shape[0]}"
+            assert seg.shape[0] == N_COLS, (
+                f"Expected {N_COLS} rows after double call, got {seg.shape[0]}"
             )
 
 
@@ -105,8 +111,8 @@ def test_projected_coords_custom_proj(detected_dataset):
     lon, lat = seg[2, :], seg[3, :]
     x_expected, y_expected = custom_proj(lon, lat)
 
-    np.testing.assert_allclose(seg[7, :], x_expected, rtol=1e-6)
-    np.testing.assert_allclose(seg[8, :], y_expected, rtol=1e-6)
+    np.testing.assert_allclose(seg[IDX_X, :], x_expected, rtol=1e-6)
+    np.testing.assert_allclose(seg[IDX_Y, :], y_expected, rtol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -683,3 +689,128 @@ def test_compute_growthrate_requires_tracking(tmp_path):
     ds.detect_lkfs(indexes=[0])
     with pytest.raises(RuntimeError, match="tracking"):
         ds.compute_growthrate()
+
+
+# ---------------------------------------------------------------------------
+# Lemieux metrics: per-pixel width (compute_width=True by default)
+# ---------------------------------------------------------------------------
+
+WIDTH_DSEARCH = 5  # default; max half-width = dsearch*sqrt(2) for diagonal LKFs
+
+
+def test_width_index_pointers(detected_dataset):
+    """detect_lkfs(compute_width=True) sets indwidth0=7, indwidth1=8."""
+    ds = detected_dataset
+    assert ds.indwidth0 == 7
+    assert ds.indwidth1 == 8
+
+
+def test_width_columns_present(detected_dataset):
+    """Every detected segment carries the two half-width rows."""
+    ds = detected_dataset
+    detected_ts = [t for t in range(len(ds.lkfs)) if ds.lkfs[t] is not None]
+    for t in detected_ts:
+        for seg in ds.lkfs[t]:
+            assert seg.shape[0] > ds.indwidth1, "width columns missing"
+
+
+def test_width_values_in_range(detected_dataset):
+    """Half-widths are NaN or within [0, dsearch*sqrt(2)] grid cells."""
+    ds = detected_dataset
+    cap = WIDTH_DSEARCH * np.sqrt(2) + 1e-9
+    detected_ts = [t for t in range(len(ds.lkfs)) if ds.lkfs[t] is not None]
+    for t in detected_ts:
+        for seg in ds.lkfs[t]:
+            for idx in (ds.indwidth0, ds.indwidth1):
+                w = seg[idx, :]
+                valid = w[~np.isnan(w)]
+                assert np.all(valid >= 0), f"negative half-width at timestep {t}"
+                assert np.all(valid <= cap), f"half-width exceeds cap at timestep {t}"
+
+
+def test_lkf_width_class(detected_dataset):
+    """lkf_width collects positive full widths within the expected range."""
+    from lkf_tools.stats import lkf_width
+    ds = detected_dataset
+    result = lkf_width(ds)
+    assert result.width.ndim == 1
+    if result.width.size:
+        assert np.all(result.width > 0)
+        assert np.all(result.width <= 2 * WIDTH_DSEARCH * np.sqrt(2) + 1e-9)
+
+
+def test_compute_widths_method(detected_dataset):
+    """ds.compute_widths() caches result on ds.widths."""
+    ds = detected_dataset
+    widths = ds.compute_widths()
+    assert hasattr(ds, 'widths'), "compute_widths() must cache result on ds.widths"
+    assert widths is ds.widths
+
+
+def test_compute_widths_requires_width_columns(tmp_path):
+    """compute_widths() raises if detection ran with compute_width=False."""
+    import sys
+    sys.path.insert(0, str(REPO_ROOT))
+    from lkf_tools.dataset import lkf_dataset
+    ds = lkf_dataset(str(NETCDF_FILE), output_path=str(tmp_path) + "/",
+                     compute_width=False)
+    ds.detect_lkfs(indexes=[0])
+    with pytest.raises(RuntimeError, match="compute_width"):
+        ds.compute_widths()
+
+
+def test_width_indices_set_when_fully_cached(tmp_path):
+    """A fresh dataset that loads all timesteps from cache (detection loop
+    skipped) must still set indwidth0/indm0/proj, so compute_widths() works."""
+    import sys
+    sys.path.insert(0, str(REPO_ROOT))
+    from lkf_tools.dataset import process_dataset
+    out = str(tmp_path) + "/"
+    a = process_dataset(str(NETCDF_FILE), output_path=out)
+    a.detect_lkfs(indexes=[0, 1])  # writes .npy cache
+
+    # New instance, same output dir -> all timesteps read from cache.
+    b = process_dataset(str(NETCDF_FILE), output_path=out)
+    b.detect_lkfs(indexes=[0, 1])
+    assert b.indwidth0 == 7 and b.indwidth1 == 8
+    assert b.indm0 == 9 and b.indm1 == 10
+    assert hasattr(b, 'proj')
+    # Must not raise "No width columns found"
+    w = b.compute_widths()
+    assert w.width.ndim == 1
+
+
+# ---------------------------------------------------------------------------
+# Lemieux metrics: LKF-to-grid angle (per intersection, projected frame)
+# ---------------------------------------------------------------------------
+
+def test_grid_angle_available(detected_dataset):
+    """lkf_intersection exposes grid angles for the new dataset structure."""
+    from lkf_tools.stats import lkf_intersection
+    ds = detected_dataset
+    result = lkf_intersection(ds)
+    assert result.lkf_interc_gridangle is not None
+
+
+def test_grid_angle_range(detected_dataset):
+    """All grid angles lie in [0, 90] degrees (NaN allowed at grid borders)."""
+    from lkf_tools.stats import lkf_intersection
+    ds = detected_dataset
+    result = lkf_intersection(ds)
+
+    for t in range(len(result.lkf_interc_gridangle)):
+        for pair in result.lkf_interc_gridangle[t]:
+            arr = np.asarray(pair, dtype=float)
+            valid = arr[~np.isnan(arr)]
+            assert np.all(valid >= 0) and np.all(valid <= 90), (
+                f"timestep {t}: grid angle out of [0, 90]")
+
+
+def test_grid_angle_count(detected_dataset):
+    """Number of grid-angle entries matches number of grid pairs per timestep."""
+    from lkf_tools.stats import lkf_intersection
+    ds = detected_dataset
+    result = lkf_intersection(ds)
+
+    for t in range(len(result.lkf_interc_gridangle)):
+        assert len(result.lkf_interc_gridangle[t]) == len(result.lkf_interc_gridpar[t])

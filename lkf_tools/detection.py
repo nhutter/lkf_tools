@@ -1006,6 +1006,97 @@ def segs2epsvor(segs,epsI,epsII,epsvor):
     return segsf
 
 
+def segs2width(segs, eps_tot, dsearch=5, frac=0.5):
+    """Compute per-pixel LKF half-widths and attach them to segs.
+
+    Faithful port of Lemieux et al. (``lkf_metrics.lkf_calc_width``,
+    https://doi.org/10.5194/egusphere-2024-3831): at every LKF pixel the local
+    tangent (central difference, one-sided at the ends) is quantised to one of
+    eight directions.  The half-width in each of the two perpendicular
+    directions is the distance (in grid cells) at which ``eps_tot`` first drops
+    below ``frac * eps_tot`` at the LKF pixel.  Width is only defined where the
+    quantised tangent is axis-aligned or exactly diagonal (``sdelt in {1,2,4}``);
+    elsewhere it is ``NaN``.  If the deformation never drops below the target
+    within ``dsearch`` cells (or the search leaves the grid) the half-width is
+    capped at the ``dsearch`` distance.
+
+    No index shift is needed (unlike the standalone driver): segment row/col
+    index directly into the cropped/subsampled ``eps_tot`` used for detection.
+
+    Input: segs    - list of segments, each (N_cols, N_points); row 0 = grid
+                     row index, row 1 = grid column index
+           eps_tot - 2-D total deformation field the segments index into
+           dsearch - maximum search distance in grid cells (default 5)
+           frac    - half-width threshold fraction of the local max (default 0.5)
+
+    Output: list of segments with two rows appended: halfw1, halfw2 (grid cells)
+    """
+    ny, nx = eps_tot.shape
+    segsf = []
+    for iseg in segs:
+        nb = iseg.shape[1]
+        halfw1 = np.zeros(nb)
+        halfw2 = np.zeros(nb)
+        for n in range(nb):
+            j = int(iseg[0, n])
+            i = int(iseg[1, n])
+
+            if n == 0:
+                deltj = iseg[0, 1] - iseg[0, 0]
+                delti = iseg[1, 1] - iseg[1, 0]
+            elif n == nb - 1:
+                deltj = iseg[0, n] - iseg[0, n - 1]
+                delti = iseg[1, n] - iseg[1, n - 1]
+            else:
+                deltj = iseg[0, n + 1] - iseg[0, n - 1]
+                delti = iseg[1, n + 1] - iseg[1, n - 1]
+
+            # v vector quantised to 8 directions (x^ component = av, along col)
+            sdelt = int(abs(delti) + abs(deltj))
+            av = delti / max(0.1, abs(delti))
+            bv = deltj / max(0.1, abs(deltj))
+
+            # width analysed only if v is along col, along row, or at 45 deg
+            if sdelt in (1, 2, 4):
+                av1 = int(-bv); bv1 = int(av)   # v1: v rotated by +90 deg
+                av2 = int(bv);  bv2 = int(-av)  # v2: v rotated by -90 deg
+                target = frac * eps_tot[j, i]
+
+                # capped values (overwritten if eps drops below target in range)
+                halfw1[n] = np.sqrt(int(dsearch * av1) ** 2 + int(dsearch * bv1) ** 2)
+                halfw2[n] = np.sqrt(int(dsearch * av2) ** 2 + int(dsearch * bv2) ** 2)
+
+                # search along v1
+                s = 0
+                while s < dsearch:
+                    idelta = int((s + 1) * av1); jdelta = int((s + 1) * bv1)
+                    jj = j + jdelta; ii = i + idelta
+                    if jj < 0 or jj >= ny or ii < 0 or ii >= nx:
+                        break
+                    if eps_tot[jj, ii] < target:
+                        halfw1[n] = np.sqrt(idelta ** 2 + jdelta ** 2)
+                        break
+                    s += 1
+
+                # search along v2
+                s = 0
+                while s < dsearch:
+                    idelta = int((s + 1) * av2); jdelta = int((s + 1) * bv2)
+                    jj = j + jdelta; ii = i + idelta
+                    if jj < 0 or jj >= ny or ii < 0 or ii >= nx:
+                        break
+                    if eps_tot[jj, ii] < target:
+                        halfw2[n] = np.sqrt(idelta ** 2 + jdelta ** 2)
+                        break
+                    s += 1
+            else:
+                halfw1[n] = np.nan
+                halfw2[n] = np.nan
+
+        segsf.append(np.concatenate([iseg, np.stack([halfw1, halfw2])], axis=0))
+    return segsf
+
+
 
 
 

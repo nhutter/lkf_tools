@@ -44,8 +44,9 @@ class lkf_dataset(object):
     def __init__(self,netcdf_file,output_path='./',xarray=None,
                  max_kernel=5,min_kernel=1, dog_thres=0.01,skeleton_kernel=0,
                  dis_thres=4,ellp_fac=2,angle_thres=45,eps_thres=1.25,lmin=3,
-                 latlon=True,return_eps=True,use_eps=True,red_fac=1,t_red=3,
-                 mask=None, label=None):
+                 latlon=True,return_eps=True,use_eps=True,red_fac=1,t_red=1,
+                 mask=None, label=None,
+                 compute_width=True, width_dsearch=5, width_frac=0.5):
         """
         Processes deformation and drift dataset to LKF data set
 
@@ -93,13 +94,24 @@ class lkf_dataset(object):
             self.return_eps = return_eps
             self.use_eps = use_eps
             self.red_fac = red_fac
+            # Default t_red=1 (single daily field). Historically SIREX used
+            # t_red=3 (3-day averaging); the default was lowered to 1 so that
+            # detection and the per-pixel width metric share one field.
             self.t_red = t_red
+            self.compute_width = compute_width
+            self.width_dsearch = width_dsearch
+            self.width_frac = width_frac
 
             # Fixed column indices for segment arrays (N_cols, N_points)
-            # Layout: [row, col, lon, lat, div, shr, vor, x, y]
+            # Layout (compute_width=True):
+            #   [row, col, lon, lat, div, shr, vor, halfw1, halfw2, x, y]
+            # Layout (compute_width=False):
+            #   [row, col, lon, lat, div, shr, vor, x, y]
             self.indd0 = 4   # divergence
             self.indd1 = 5   # shear
             self.indd2 = 6   # vorticity
+            # indwidth0/indwidth1 (7, 8) are set in detect_lkfs when width is on;
+            # the projected x,y indices (indm0/indm1) are set dynamically there.
 
 
             # Read netcdf file
@@ -221,16 +233,71 @@ class lkf_dataset(object):
         return None
 
     def _save_stats(self, name, obj):
+        # Stamp the current detection/tracking signature so a cached stat can
+        # be invalidated when more timesteps are detected or tracked.
+        try:
+            obj._stat_signature = self._stat_signature()
+        except Exception:
+            pass
         with open(self._stats_cache_path(name), 'wb') as f:
             pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
+
+    def _stat_signature(self):
+        """Signature of the current detection/tracking state.
+
+        Cached statistics are only valid for the set of timesteps that were
+        detected (and tracked) when they were computed.  The signature is the
+        number of detected timesteps and the number of tracked timesteps; if
+        either grows (e.g. ``detect_lkfs`` is re-run over more timesteps), the
+        cache is considered stale and recomputed automatically.
+        """
+        try:
+            n_det = int(np.sum(self.timesteps_detected))
+        except Exception:
+            n_det = 0
+        try:
+            n_trk = int(sum(1 for x in self.tracked_lkfs if x is not None))
+        except Exception:
+            n_trk = 0
+        return (n_det, n_trk)
+
+    def _cached_stat(self, name):
+        """Return a cached stat (in-memory or on disk) if its signature matches.
+
+        Returns ``None`` when no valid cache exists, in which case the caller
+        recomputes.  A cache whose stored signature differs from the current
+        detection/tracking state (or that predates signature stamping) is
+        treated as stale.
+        """
+        sig = self._stat_signature()
+        obj = self.__dict__.get(name)
+        if obj is not None and getattr(obj, '_stat_signature', None) == sig:
+            return obj
+        obj = self._load_stats(name)
+        if obj is not None and getattr(obj, '_stat_signature', None) == sig:
+            self.__dict__[name] = obj
+            return obj
+        return None
     
     def detect_lkfs(self,indexes=None,force_redetect=False):
         """
         Detects LKFs in data set given in netcdf file
-        
+
         :param indexes: time indexes that should be detected. If None all time steps are detected
         """
-        
+
+        # The per-pixel LKF width (Lemieux et al.) is measured on the last
+        # sub-timestep of the averaging window, whereas detection uses the
+        # t_red-averaged field.  The width is therefore only precise when
+        # detection and width share a single field, i.e. t_red == 1.
+        if getattr(self, 'compute_width', False) and self.t_red > 1:
+            warnings.warn(
+                f"compute_width=True with t_red={self.t_red}: LKF width is "
+                "measured on the last day of the averaging window, not the "
+                "t_red-averaged field used for detection. The width metric "
+                "only yields precise results with t_red=1.",
+                stacklevel=2)
+
         # Check for already detected features; skip them unless force_redetect=True
         if not force_redetect and os.path.exists(self.lkfpath):
             self.lkf_filelist = [i for i in os.listdir(self.lkfpath) if i.startswith('lkf') and i.endswith('.npy')]
@@ -337,12 +404,29 @@ class lkf_dataset(object):
                                 np.array(vor[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
                                        max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac]))
 
+            # Per-pixel LKF half-widths (Lemieux et al.), columns 7 and 8.
+            # Uses the same cropped/subsampled eps_tot field as detection.
+            if self.return_eps and getattr(self, 'compute_width', False):
+                eps_tot_w = np.array(np.sqrt(
+                    div[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
+                        max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac]**2 +
+                    shr[max([0,self.index_y[0][0]-1]):self.index_y[0][-1]+2:self.red_fac,
+                        max([0,self.index_x[0][0]-1]):self.index_x[0][-1]+2:self.red_fac]**2))
+                lkf = segs2width(lkf, eps_tot_w,
+                                 dsearch=self.width_dsearch, frac=self.width_frac)
+                self.indwidth0 = 7
+                self.indwidth1 = 8
+
             if self.latlon:
                 if not hasattr(self, 'proj'):
                     from pyproj import Proj as _Proj
                     self.proj = _Proj(proj='stere', lat_0=90, lat_ts=75, lon_0=-45, ellps='WGS84')
-                    self.indm0 = 7
-                    self.indm1 = 8
+                    # x,y are appended as the last two rows; index depends on
+                    # whether width columns are present (9,10) or not (7,8).
+                    n_base = lkf[0].shape[0] if len(lkf) else (
+                        9 if hasattr(self, 'indwidth0') else 7)
+                    self.indm0 = n_base
+                    self.indm1 = n_base + 1
                 proj_segs = []
                 for seg in lkf:
                     x, y = self.proj(seg[2, :], seg[3, :])
@@ -366,17 +450,48 @@ class lkf_dataset(object):
                 rows = ilkf[0, :].astype('int') + self.index_y[0][0]
                 cols = ilkf[1, :].astype('int') + self.index_x[0][0]
                 lkfs_np[it, rows, cols] = inum
-            
-            
-            
-            
+
+        # Ensure the column-index pointers are set even when every timestep was
+        # loaded from cache (the per-timestep loop above, which normally sets
+        # them, is skipped in that case).
+        self._ensure_column_indices()
+
+    def _ensure_column_indices(self):
+        """Set segment column-index pointers from the detection flags.
+
+        The per-segment layout is determined deterministically by the
+        ``latlon``, ``return_eps`` and ``compute_width`` flags:
+        ``[row, col, (lon, lat), (div, shr, vor), (halfw1, halfw2), (x, y)]``.
+        These pointers (``indwidth0/1`` and ``indm0/1``) are normally set inside
+        ``detect_lkfs`` while detecting, but that loop is skipped when all
+        timesteps are read from cache — so set them here too, idempotently.
+        """
+        ncol = 2  # row, col
+        if self.latlon:
+            ncol += 2          # lon, lat
+        if self.return_eps:
+            ncol += 3          # div, shr, vor
+        if self.return_eps and getattr(self, 'compute_width', False):
+            self.indwidth0 = ncol
+            self.indwidth1 = ncol + 1
+            ncol += 2
+        if self.latlon:
+            if not hasattr(self, 'proj'):
+                from pyproj import Proj as _Proj
+                self.proj = _Proj(proj='stere', lat_0=90, lat_ts=75,
+                                  lon_0=-45, ellps='WGS84')
+            self.indm0 = ncol
+            self.indm1 = ncol + 1
+
     def compute_projected_coords(self, proj=None):
         """Append projected (x, y) coordinates to every LKF segment.
 
         Reads lon (row 2) and lat (row 3) from each segment, projects them to
-        Cartesian metres using *proj*, and appends x and y as two new rows
-        (indices 7 and 8).  The method is idempotent: calling it a second time
-        with the same projection leaves the arrays unchanged.
+        Cartesian metres using *proj*, and appends x and y as the last two
+        rows.  When per-pixel width columns are present (``compute_width=True``
+        during detection) x,y land at indices 9 and 10, otherwise at 7 and 8.
+        The method is idempotent: calling it a second time with the same
+        projection leaves the arrays unchanged.
 
         Parameters
         ----------
@@ -388,15 +503,18 @@ class lkf_dataset(object):
         Sets
         ----
         self.proj   : the Proj instance used
-        self.indm0  : 7  (column index of x in the (N_cols, N_points) array)
-        self.indm1  : 8  (column index of y)
+        self.indm0  : column index of x (9 with width columns, else 7)
+        self.indm1  : column index of y (10 with width columns, else 8)
         """
         from pyproj import Proj as _Proj
         if proj is None:
             proj = _Proj(proj='stere', lat_0=90, lat_ts=75, lon_0=-45, ellps='WGS84')
         self.proj  = proj
-        self.indm0 = 7
-        self.indm1 = 8
+        # Non-projection columns: 7 base (row,col,lon,lat,div,shr,vor) plus the
+        # two half-width columns when present.
+        n_base = 9 if hasattr(self, 'indwidth0') else 7
+        self.indm0 = n_base
+        self.indm1 = n_base + 1
 
         for t in range(len(self.lkfs)):
             if self.lkfs[t] is None:
@@ -404,9 +522,9 @@ class lkf_dataset(object):
             new_segs = []
             for seg in self.lkfs[t]:
                 # seg shape: (N_cols, N_points); row 2=lon, row 3=lat
-                if seg.shape[0] == 9:
-                    # Already projected — re-project with current proj
-                    seg = seg[:7, :]
+                if seg.shape[0] > n_base:
+                    # Already projected — strip x,y and re-project
+                    seg = seg[:n_base, :]
                 x, y = proj(seg[2, :], seg[3, :])
                 new_segs.append(np.concatenate([seg, np.stack([x, y])], axis=0))
             self.lkfs[t] = new_segs
@@ -428,13 +546,10 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_lengths` instance (also stored as
             ``self.lengths``).
         """
-        if not force_recompute and 'lengths' in self.__dict__ and self.__dict__['lengths'] is not None:
-            return self.lengths
         if not force_recompute:
-            cached = self._load_stats('lengths')
+            cached = self._cached_stat('lengths')
             if cached is not None:
-                self.lengths = cached
-                return self.lengths
+                return cached
         self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
@@ -462,13 +577,10 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_density` instance (also stored as
             ``self.density``).
         """
-        if not force_recompute and 'density' in self.__dict__ and self.__dict__['density'] is not None:
-            return self.density
         if not force_recompute:
-            cached = self._load_stats('density')
+            cached = self._cached_stat('density')
             if cached is not None:
-                self.density = cached
-                return self.density
+                return cached
         self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
@@ -493,13 +605,10 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_curvature` instance (also stored
             as ``self.curvature``).
         """
-        if not force_recompute and 'curvature' in self.__dict__ and self.__dict__['curvature'] is not None:
-            return self.curvature
         if not force_recompute:
-            cached = self._load_stats('curvature')
+            cached = self._cached_stat('curvature')
             if cached is not None:
-                self.curvature = cached
-                return self.curvature
+                return cached
         self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
@@ -524,13 +633,10 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_deformation` instance (also stored
             as ``self.deformation``).
         """
-        if not force_recompute and 'deformation' in self.__dict__ and self.__dict__['deformation'] is not None:
-            return self.deformation
         if not force_recompute:
-            cached = self._load_stats('deformation')
+            cached = self._cached_stat('deformation')
             if cached is not None:
-                self.deformation = cached
-                return self.deformation
+                return cached
         self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
@@ -563,14 +669,11 @@ class lkf_dataset(object):
         lkf_intersection
             The :class:`lkf_tools.stats.lkf_intersection` instance.
         """
-        if not force_recompute and 'intersection' in self.__dict__ and self.__dict__['intersection'] is not None:
-            return self.intersection
         if not force_recompute:
-            cached = self._load_stats('intersection')
+            cached = self._cached_stat('intersection')
             if cached is not None:
-                self.intersection = cached
-                self.intersection._lkf = self  # refresh stale back-reference
-                return self.intersection
+                cached._lkf = self  # refresh stale back-reference
+                return cached
         self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
@@ -595,13 +698,10 @@ class lkf_dataset(object):
         lkf_orientation
             The :class:`lkf_tools.stats.lkf_orientation` instance.
         """
-        if not force_recompute and 'orientation' in self.__dict__ and self.__dict__['orientation'] is not None:
-            return self.orientation
         if not force_recompute:
-            cached = self._load_stats('orientation')
+            cached = self._cached_stat('orientation')
             if cached is not None:
-                self.orientation = cached
-                return self.orientation
+                return cached
         self._require_detection()
         if not hasattr(self, 'indm0'):
             self.compute_projected_coords()
@@ -609,6 +709,37 @@ class lkf_dataset(object):
         self.orientation = lkf_orientation(self)
         self._save_stats('orientation', self.orientation)
         return self.orientation
+
+    def compute_widths(self, force_recompute=False):
+        """Collect per-pixel LKF half-widths and cache on ``self.widths``.
+
+        Requires that detection was run with ``compute_width=True`` (the
+        default), so that the half-width columns are present on each segment.
+
+        Parameters
+        ----------
+        force_recompute : bool, optional
+            Re-run the computation even if a cached result exists.  Default ``False``.
+
+        Returns
+        -------
+        lkf_width
+            The :class:`lkf_tools.stats.lkf_width` instance (also stored as
+            ``self.widths``).
+        """
+        if not force_recompute:
+            cached = self._cached_stat('widths')
+            if cached is not None:
+                return cached
+        self._require_detection()
+        if not hasattr(self, 'indwidth0'):
+            raise RuntimeError(
+                "No width columns found. Run detect_lkfs() with "
+                "compute_width=True before computing width statistics.")
+        from lkf_tools.stats import lkf_width
+        self.widths = lkf_width(self)
+        self._save_stats('widths', self.widths)
+        return self.widths
 
     def compute_lifetime(self, force_recompute=False):
         """Compute per-segment lifetime and cache on ``self.lifetime``.
@@ -627,13 +758,10 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_lifetime` instance (also stored
             as ``self.lifetime``).
         """
-        if not force_recompute and 'lifetime' in self.__dict__ and self.__dict__['lifetime'] is not None:
-            return self.lifetime
         if not force_recompute:
-            cached = self._load_stats('lifetime')
+            cached = self._cached_stat('lifetime')
             if cached is not None:
-                self.lifetime = cached
-                return self.lifetime
+                return cached
         self._require_tracking()
         from lkf_tools.stats import lkf_lifetime
         self.lifetime = lkf_lifetime(self)
@@ -657,13 +785,10 @@ class lkf_dataset(object):
             The :class:`lkf_tools.stats.lkf_growthrate` instance (also stored
             as ``self.growthrate``).
         """
-        if not force_recompute and 'growthrate' in self.__dict__ and self.__dict__['growthrate'] is not None:
-            return self.growthrate
         if not force_recompute:
-            cached = self._load_stats('growthrate')
+            cached = self._cached_stat('growthrate')
             if cached is not None:
-                self.growthrate = cached
-                return self.growthrate
+                return cached
         self._require_tracking()
         if not hasattr(self, 'lifetime') or self.lifetime is None:
             self.compute_lifetime(force_recompute=force_recompute)

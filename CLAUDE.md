@@ -33,7 +33,7 @@ The main entry point is `lkf_dataset` in `lkf_tools/dataset.py`. The typical wor
 
 ### Data formats
 
-- LKFs are stored as numpy object arrays of segments, each segment a `(N_cols, N_points)` array. Columns are `[row_idx, col_idx, lon, lat, div, shr, vor]` (after lat/lon and deformation enrichment).
+- LKFs are stored as numpy object arrays of segments, each segment a `(N_cols, N_points)` array. Columns are `[row_idx, col_idx, lon, lat, div, shr, vor]` (after lat/lon and deformation enrichment). With `compute_width=True` (default) two per-pixel half-width columns `halfw1, halfw2` are appended (indices 7,8). Projected `x, y` are then appended last, so the full layout is `[row, col, lon, lat, div, shr, vor, halfw1, halfw2, x, y]` and `indm0/indm1` point at `x, y` dynamically (9,10 with width, 7,8 without).
 - Files are named `lkf_<stem>_<NNN>.npy` (detected) and `lkf_tracked_pairs_<stem>_to_<stem>.npy` (tracked pairs).
 - The `stats.py` module reads these files from a directory tree organized by year subdirectories.
 
@@ -46,7 +46,7 @@ The main entry point is `lkf_dataset` in `lkf_tools/dataset.py`. The typical wor
 | `eps_thres` | Minimum total deformation rate to keep a pixel |
 | `lmin` | Minimum segment length (in grid cells) |
 | `red_fac` | Spatial subsampling factor (resolution reduction) |
-| `t_red` | Number of timesteps averaged before detection |
+| `t_red` | Number of timesteps averaged before detection. Default `1` (single daily field). Values >1 average `t_red` days, but then the per-pixel LKF width is measured on the last day only, so width is precise only with `t_red=1`. |
 
 All spatial parameters are automatically scaled by `corfac = 12.5km / mean_grid_spacing / red_fac` to stay resolution-independent.
 
@@ -58,6 +58,7 @@ The `legacy_code/` directory contains older standalone scripts that predate the 
 - Performance improvements: @tasks/task-performance.md
 - Parallelization:          @tasks/task-parallelization.md
 - Stats integration:        @tasks/task-stats-integration.md
+- Lemieux metrics:          @tasks/task-lemieux-metrics.md
 ```
 
 And the directory layout becomes:
