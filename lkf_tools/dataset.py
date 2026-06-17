@@ -1093,7 +1093,7 @@ class lkf_collection:
         """Flat array of segment shrink rates (m per timestep) across all datasets."""
         return self._flat_1d('growthrate', 'lkf_shrink')
 
-    def _get_interc_arrays(self, lifetime_val=None):
+    def _get_interc_arrays(self, lifetime_val=None, deformation_type='all'):
         """Aggregate intersection angles and types across all flat datasets.
 
         Parameters
@@ -1102,6 +1102,9 @@ class lkf_collection:
             When not None, only include pairs where both segments have
             ``lifetime == lifetime_val`` according to each dataset's own
             ``lifetime`` object.
+        deformation_type : {'all', 'lead', 'ridge'}
+            When not ``'all'``, only include pairs where both segments have
+            positive (``'lead'``) or negative (``'ridge'``) mean divergence.
 
         Returns
         -------
@@ -1111,6 +1114,8 @@ class lkf_collection:
             1-D integer array of types (0 = opp. vorticity, 1 = same vorticity).
             Empty if no vorticity data is available.
         """
+        if deformation_type not in ('all', 'lead', 'ridge'):
+            raise ValueError("deformation_type must be 'all', 'lead' or 'ridge'.")
         ang_parts = []
         type_parts = []
         for ds, _ in self._iter_flat_datasets():
@@ -1119,6 +1124,11 @@ class lkf_collection:
             itype = getattr(ds.intersection, 'lkf_interc_type', None)
             ipar  = getattr(ds.intersection, 'lkf_interc_par', None)
             lt_obj = ds.__dict__.get('lifetime') if lifetime_val is not None else None
+            indd0 = getattr(ds, 'indd0', None)
+            if deformation_type != 'all' and (indd0 is None or not hasattr(ds, 'lkfs')):
+                raise RuntimeError(
+                    "deformation_type filter requires datasets carrying "
+                    "per-pixel divergence (indd0).")
             for t in self._detected(ds):
                 angs = ds.intersection.lkf_interc[t]
                 if len(angs) == 0:
@@ -1127,17 +1137,34 @@ class lkf_collection:
                 types = (np.asarray(itype[t], dtype=int)
                          if (itype is not None and t < len(itype) and len(itype[t]))
                          else None)
-                if (lifetime_val is not None and lt_obj is not None
-                        and ipar is not None and t < len(ipar) and len(ipar[t])):
+                has_pairs = ipar is not None and t < len(ipar) and len(ipar[t])
+                mask = None
+                if lifetime_val is not None and lt_obj is not None and has_pairs:
                     lts   = (lt_obj.lkf_lifetime[t]
                              if t < len(lt_obj.lkf_lifetime) else np.array([]))
                     pairs = ipar[t]
-                    mask  = np.array([
+                    m = np.array([
                         (int(p[0]) < len(lts) and lts[int(p[0])] == lifetime_val and
                          int(p[1]) < len(lts) and lts[int(p[1])] == lifetime_val)
                         for p in pairs
                     ], dtype=bool)
-                    angs  = angs[mask]
+                    mask = m if mask is None else (mask & m)
+                if deformation_type != 'all' and has_pairs:
+                    segs = ds.lkfs[t] if t < len(ds.lkfs) else None
+                    mdiv = (np.array([np.nanmean(s[indd0, :]) for s in segs])
+                            if segs is not None else np.array([]))
+                    pairs = ipar[t]
+                    if deformation_type == 'lead':
+                        m = np.array([(int(p[0]) < len(mdiv) and mdiv[int(p[0])] > 0 and
+                                       int(p[1]) < len(mdiv) and mdiv[int(p[1])] > 0)
+                                      for p in pairs], dtype=bool)
+                    else:  # ridge
+                        m = np.array([(int(p[0]) < len(mdiv) and mdiv[int(p[0])] < 0 and
+                                       int(p[1]) < len(mdiv) and mdiv[int(p[1])] < 0)
+                                      for p in pairs], dtype=bool)
+                    mask = m if mask is None else (mask & m)
+                if mask is not None:
+                    angs = angs[mask]
                     if types is not None:
                         types = types[mask]
                 if len(angs) == 0:
@@ -1408,7 +1435,8 @@ class lkf_collection:
 
     def plot_intersection(self, by_dataset=None, ax=None, bins=18,
                           colors=None, use_vorticity=None,
-                          intersection_type='both', lifetime=None, **kw):
+                          intersection_type='both', lifetime=None,
+                          deformation_type='all', **kw):
         """Plot histogram of LKF intersection angles.
 
         Parameters
@@ -1429,6 +1457,12 @@ class lkf_collection:
             When set (e.g. ``lifetime=1``), restrict to pairs where **both**
             segments have that lifetime value, using each dataset's own
             ``lifetime`` object.
+        deformation_type : {'all', 'lead', 'ridge'}, optional
+            Restrict to intersections between LKFs of a given deformation type
+            (by each segment's mean divergence): ``'lead'`` keeps pairs where
+            both LKFs open (positive mean divergence), ``'ridge'`` keeps pairs
+            where both close (negative mean divergence), ``'all'`` (default)
+            keeps every pair.
 
         Returns
         -------
@@ -1462,10 +1496,14 @@ class lkf_collection:
             return ns
 
         if not by_dataset:
-            ang_flat, type_flat = self._get_interc_arrays(lifetime_val=lifetime)
+            ang_flat, type_flat = self._get_interc_arrays(
+                lifetime_val=lifetime, deformation_type=deformation_type)
             proxy = _make_proxy_from_arrays(ang_flat, type_flat)
+            # deformation_type passed only to set the title; the proxy has no
+            # pairs, so plot() will not re-filter (already filtered above).
             return lkf_intersection.plot(proxy, ax=ax, bins=bins,
-                                         intersection_type=intersection_type, **kw)
+                                         intersection_type=intersection_type,
+                                         deformation_type=deformation_type, **kw)
 
         if ax is None:
             fig, ax = plt.subplots(figsize=(5, 4))
@@ -1477,12 +1515,14 @@ class lkf_collection:
             elem_label = self._elem_label(elem, i)
             # Aggregate flat arrays for this element (dataset or nested collection)
             if isinstance(elem, lkf_collection):
-                ang_e, type_e = elem._get_interc_arrays(lifetime_val=lifetime)
+                ang_e, type_e = elem._get_interc_arrays(
+                    lifetime_val=lifetime, deformation_type=deformation_type)
             else:
                 if not hasattr(elem, 'intersection') or elem.intersection is None:
                     continue
                 tmp = lkf_collection([elem])
-                ang_e, type_e = tmp._get_interc_arrays(lifetime_val=lifetime)
+                ang_e, type_e = tmp._get_interc_arrays(
+                    lifetime_val=lifetime, deformation_type=deformation_type)
             if len(ang_e) == 0:
                 continue
             sub = _make_proxy_from_arrays(ang_e, type_e)
@@ -1491,7 +1531,10 @@ class lkf_collection:
                                   intersection_type=intersection_type,
                                   label=elem_label)
         ax.legend(fontsize=8)
-        ax.set_title('LKF intersection angles')
+        title = 'LKF intersection angles'
+        if deformation_type != 'all':
+            title += f' ({deformation_type}s)'
+        ax.set_title(title)
         return fig, ax
 
     def plot_orientation(self, by_dataset=None, ax=None, bins=36,

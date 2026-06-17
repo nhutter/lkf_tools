@@ -1303,7 +1303,7 @@ class lkf_intersection:
             return None
 
     def plot(self, ax=None, bins=18, color0='C0', color1='C1', lifetime=None,
-             intersection_type='both', label=None):
+             intersection_type='both', deformation_type='all', label=None):
         """Plot a histogram of LKF intersection angles.
 
         Without vorticity (``use_vorticity=False``) angles are folded into
@@ -1335,6 +1335,13 @@ class lkf_intersection:
             ``use_vorticity=True``).  ``'opp'`` shows only Type 0 (opposite
             vorticity); ``'same'`` shows only Type 1 (same vorticity);
             ``'both'`` (default) shows both.
+        deformation_type : {'all', 'lead', 'ridge'}, optional
+            Restrict to intersections between LKFs of a given deformation type,
+            classified by each segment's mean divergence.  ``'lead'`` keeps
+            pairs where **both** LKFs have positive mean divergence (opening);
+            ``'ridge'`` keeps pairs where both have negative mean divergence
+            (closing); ``'all'`` (default) keeps every pair.  Requires a
+            dataset carrying per-pixel divergence (``indd0``).
         label : str or None, optional
             Label prefix attached to histogram bars.  When ``None`` the
             default type descriptions are used.  When set, type-0 bars are
@@ -1347,43 +1354,83 @@ class lkf_intersection:
         """
         use_vorticity = getattr(self, 'use_vorticity', False)
 
-        all_ang = _flatten_obj(self.lkf_interc)
-        # Populate type array early so filters can use it
-        all_type = None
-        if use_vorticity and hasattr(self, 'lkf_interc_type'):
-            all_type = _flatten_obj(self.lkf_interc_type)
+        if deformation_type not in ('all', 'lead', 'ridge'):
+            raise ValueError("deformation_type must be 'all', 'lead' or 'ridge'.")
 
-        # Optionally filter to pairs where both segments have a given lifetime.
-        # ``lifetime`` may be:
-        #   - an int/float : filter value; lifetime arrays come from self._lkf
-        #   - a lkf_lifetime instance (legacy): use it directly, filter value == 1
-        if lifetime is not None and hasattr(self, 'lkf_interc_par'):
-            if isinstance(lifetime, (int, float, np.integer, np.floating)):
-                lt_val = int(lifetime)
-                lt_obj = getattr(getattr(self, '_lkf', None), 'lifetime', None)
-                if lt_obj is None:
+        # Both the lifetime and deformation-type filters act per intersection
+        # pair, so they share one per-timestep pass; the simple flatten is used
+        # only when neither is active (preserving the default behaviour exactly).
+        need_pair_filter = ((lifetime is not None) or
+                            (deformation_type != 'all')) and hasattr(self, 'lkf_interc_par')
+
+        if not need_pair_filter:
+            all_ang = _flatten_obj(self.lkf_interc)
+            all_type = (_flatten_obj(self.lkf_interc_type)
+                        if (use_vorticity and hasattr(self, 'lkf_interc_type'))
+                        else None)
+        else:
+            # Resolve the lifetime filter object/value if requested.
+            # ``lifetime`` may be an int/float (value; lifetime arrays from
+            # self._lkf) or a lkf_lifetime instance (legacy; value == 1).
+            lt_obj = None
+            lt_val = None
+            if lifetime is not None:
+                if isinstance(lifetime, (int, float, np.integer, np.floating)):
+                    lt_val = int(lifetime)
+                    lt_obj = getattr(getattr(self, '_lkf', None), 'lifetime', None)
+                    if lt_obj is None:
+                        raise RuntimeError(
+                            "lifetime filter requires compute_lifetime() to have been called first.")
+                else:
+                    lt_obj = lifetime
+                    lt_val = 1
+
+            # Resolve divergence access for the deformation-type filter.
+            lkf = getattr(self, '_lkf', None)
+            indd0 = None
+            if deformation_type != 'all':
+                if lkf is None or not hasattr(lkf, 'lkfs') or not hasattr(lkf, 'indd0'):
                     raise RuntimeError(
-                        "lifetime filter requires compute_lifetime() to have been called first.")
-            else:
-                # Legacy: caller passes a lkf_lifetime object directly
-                lt_obj = lifetime
-                lt_val = 1
+                        "deformation_type filter requires a dataset carrying "
+                        "per-pixel divergence (indd0); not available here.")
+                indd0 = lkf.indd0
+
             filtered_ang = []
             filtered_type = []
             for t in range(len(self.lkf_interc)):
                 if t >= len(self.lkf_interc_par):
                     continue
                 angles = self.lkf_interc[t]
-                pairs  = self.lkf_interc_par[t]
-                lts    = lt_obj.lkf_lifetime[t] if t < len(lt_obj.lkf_lifetime) else np.array([])
-                ty_t   = (self.lkf_interc_type[t]
-                          if (use_vorticity and hasattr(self, 'lkf_interc_type')
-                              and t < len(self.lkf_interc_type))
-                          else [])
+                pairs = self.lkf_interc_par[t]
+                if len(angles) == 0:
+                    continue
+                ty_t = (self.lkf_interc_type[t]
+                        if (use_vorticity and hasattr(self, 'lkf_interc_type')
+                            and t < len(self.lkf_interc_type))
+                        else [])
+                lts = (lt_obj.lkf_lifetime[t]
+                       if (lt_obj is not None and t < len(lt_obj.lkf_lifetime))
+                       else np.array([]))
+                # Mean divergence per segment for this timestep (>0 lead, <0 ridge).
+                if deformation_type != 'all':
+                    segs = lkf.lkfs[t] if t < len(lkf.lkfs) else None
+                    mdiv = (np.array([np.nanmean(s[indd0, :]) for s in segs])
+                            if segs is not None else np.array([]))
                 for k, (ang, pair) in enumerate(zip(angles, pairs)):
-                    i_lt = lts[int(pair[0])] if int(pair[0]) < len(lts) else np.nan
-                    j_lt = lts[int(pair[1])] if int(pair[1]) < len(lts) else np.nan
-                    if i_lt == lt_val and j_lt == lt_val:
+                    i, j = int(pair[0]), int(pair[1])
+                    keep = True
+                    if lifetime is not None:
+                        i_lt = lts[i] if i < len(lts) else np.nan
+                        j_lt = lts[j] if j < len(lts) else np.nan
+                        keep = keep and (i_lt == lt_val and j_lt == lt_val)
+                    if deformation_type != 'all':
+                        di = mdiv[i] if i < len(mdiv) else np.nan
+                        dj = mdiv[j] if j < len(mdiv) else np.nan
+                        if deformation_type == 'lead':
+                            keep = keep and (di > 0 and dj > 0)
+                        else:  # ridge
+                            keep = keep and (di < 0 and dj < 0)
+                    if keep:
                         filtered_ang.append(ang)
                         if use_vorticity and k < len(ty_t):
                             filtered_type.append(ty_t[k])
@@ -1435,7 +1482,10 @@ class lkf_intersection:
             ax.legend(fontsize=8)
 
         ax.set_ylabel('PDF')
-        ax.set_title('LKF intersection angles')
+        title = 'LKF intersection angles'
+        if deformation_type != 'all':
+            title += f' ({deformation_type}s)'
+        ax.set_title(title)
         fig.tight_layout()
         return fig, ax
 

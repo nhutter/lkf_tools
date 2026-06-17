@@ -403,6 +403,40 @@ def test_compute_intersection_method(detected_dataset):
     assert inter is ds.intersection
 
 
+def test_intersection_deformation_type_filter(detected_dataset):
+    """plot_intersection's deformation_type filter (lead/ridge) matches a manual
+    divergence-based count, via lkf_collection._get_interc_arrays."""
+    from lkf_tools.dataset import lkf_collection
+    ds = detected_dataset
+    ic = ds.compute_intersection()
+
+    # Manual expected counts from mean divergence of each paired segment.
+    i0 = ds.indd0
+    n_all = n_lead = n_ridge = 0
+    for t in range(len(ds.lkfs)):
+        if ds.lkfs[t] is None:
+            continue
+        md = np.array([np.nanmean(s[i0, :]) for s in ds.lkfs[t]])
+        for pair in ic.lkf_interc_par[t]:
+            a, b = int(pair[0]), int(pair[1])
+            n_all += 1
+            if md[a] > 0 and md[b] > 0:
+                n_lead += 1
+            elif md[a] < 0 and md[b] < 0:
+                n_ridge += 1
+
+    col = lkf_collection([ds])
+    assert col._get_interc_arrays(deformation_type='all')[0].size == n_all
+    assert col._get_interc_arrays(deformation_type='lead')[0].size == n_lead
+    assert col._get_interc_arrays(deformation_type='ridge')[0].size == n_ridge
+    # leads and ridges are disjoint subsets of all
+    assert n_lead + n_ridge <= n_all
+
+    # invalid value raises
+    with pytest.raises(ValueError, match="deformation_type"):
+        col._get_interc_arrays(deformation_type='bogus')
+
+
 # ---------------------------------------------------------------------------
 # Phase B batch 3: lkf_orientation
 # ---------------------------------------------------------------------------
